@@ -47,3 +47,38 @@ fn fixtures_keep_their_special_bytes() {
     assert!(read("tabs.config").contains("\tHostName=gitlab.example.com"));
     assert!(read("tabs.config").contains("legacy.example.com   \n"));
 }
+
+#[test]
+fn document_round_trips_every_fixture() {
+    for path in fixtures() {
+        let input = fs::read_to_string(&path).expect("fixture is UTF-8");
+        let doc = sshcm_core::Document::parse(&input);
+        assert_eq!(
+            doc.render().as_bytes(),
+            input.as_bytes(),
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn saving_an_entry_without_changes_keeps_every_byte() {
+    for path in fixtures() {
+        let input = fs::read_to_string(&path).expect("fixture is UTF-8");
+        let mut doc = sshcm_core::Document::parse(&input);
+        for entry in doc.entries() {
+            if entry.read_only() {
+                continue;
+            }
+            doc.update(entry.alias(), &entry.conn).expect("update");
+            assert_eq!(
+                doc.render().as_bytes(),
+                input.as_bytes(),
+                "{}: {}",
+                path.display(),
+                entry.alias()
+            );
+        }
+    }
+}

@@ -11,3 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+glob = "0.3.4"
+tempfile = "3.27.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
