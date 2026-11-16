@@ -322,7 +322,12 @@ pub struct Known {
 }
 
 impl Known {
-    /// True when `from` reaches `target` by following jump hosts.
+    /// True when the connection `from` reaches `target` by following jump
+    /// hosts. Picking `from` as a jump host of `target` would be a loop.
+    pub fn jumps_through(&self, from: &str, target: &str) -> bool {
+        self.reaches(from, target, &mut Vec::new())
+    }
+
     fn reaches(&self, from: &str, target: &str, seen: &mut Vec<String>) -> bool {
         if from == target {
             return true;

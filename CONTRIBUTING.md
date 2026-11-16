@@ -14,6 +14,13 @@ cargo test --workspace
 
 CI runs the same three commands on macOS and Linux for every change.
 
+To check that the parser leaves your own config untouched (read-only, nothing
+is written):
+
+```sh
+cargo run -p sshcm-core --example roundtrip -- ~/.ssh/config
+```
+
 ## Layout
 
 - `crates/sshcm-core` holds all logic: the lossless parser, block editing,
