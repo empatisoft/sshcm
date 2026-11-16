@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/sshcm-core", "crates/sshcm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+authors = ["Onur Kaya"]
+repository = "https://github.com/empatisoft/sshcm"
+homepage = "https://github.com/empatisoft/sshcm"
+keywords = ["ssh", "ssh-config", "cli"]
+categories = ["command-line-utilities"]
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
