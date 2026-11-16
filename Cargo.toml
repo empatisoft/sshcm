@@ -9,7 +9,6 @@ rust-version = "1.100"
 license = "MIT"
 authors = ["Onur Kaya"]
 repository = "https://github.com/empatisoft/sshcm"
-homepage = "https://github.com/empatisoft/sshcm"
 keywords = ["ssh", "ssh-config", "cli"]
 categories = ["command-line-utilities"]
 
