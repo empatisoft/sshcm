@@ -331,8 +331,22 @@ impl Store {
         }
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let base = format!("{}{stamp}", self.backup_prefix());
-        // Two writes in the same second get a numeric suffix.
-        for n in 0.. {
+        // Two writes in the same second get a numeric suffix. The suffix
+        // continues after the highest one in use, so that a name freed by
+        // pruning is never reused for a newer backup.
+        let first = fs::read_dir(&dir)
+            .map_err(io_err(&dir))?
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                match name.strip_prefix(&base)? {
+                    "" => Some(0),
+                    rest => rest.strip_prefix('-')?.parse::<u32>().ok(),
+                }
+            })
+            .max()
+            .map_or(0, |n| n + 1);
+        for n in first.. {
             let name = if n == 0 {
                 base.clone()
             } else {
