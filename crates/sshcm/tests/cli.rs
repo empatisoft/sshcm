@@ -322,14 +322,11 @@ fn invalid_input_exits_with_1_and_leaves_the_file_alone() {
 }
 
 #[test]
-fn patterns_and_included_files_are_read_only() {
+fn included_files_are_edited_in_place_and_patterns_are_read_only() {
     let sb = Sandbox::new();
     fs::create_dir(sb.home().join(".ssh/config.d")).unwrap();
-    fs::write(
-        sb.home().join(".ssh/config.d/work"),
-        "Host legacy-vpn\n    HostName vpn.example.com\n",
-    )
-    .unwrap();
+    let work = sb.home().join(".ssh/config.d/work");
+    fs::write(&work, "Host legacy-vpn\n    HostName vpn.example.com\n").unwrap();
     let config =
         "Include config.d/*\n\nHost a\n    HostName a.example.com\n\nHost *\n    User me\n";
     sb.write_config(config);
@@ -338,37 +335,60 @@ fn patterns_and_included_files_are_read_only() {
     assert_eq!(run.code, 0);
     assert_eq!(
         run.stdout,
-        "ALIAS  HOSTNAME       USER  PORT  PROXY\n\
-         a      a.example.com        22\n\
+        "ALIAS       HOSTNAME         USER  PORT  PROXY  FILE\n\
+         a           a.example.com          22\n\
+         legacy-vpn  vpn.example.com        22           ~/.ssh/config.d/work\n\
          \n\
          Read-only\n\
-         *           pattern\n\
-         legacy-vpn  included from ~/.ssh/config.d/work\n"
+         *  pattern\n"
+    );
+    assert!(
+        sb.run(&["show", "legacy-vpn"])
+            .stdout
+            .contains("Included from  ~/.ssh/config.d/work\n")
     );
 
-    for args in [
-        &["rm", "legacy-vpn"][..],
-        &["rm", "*"],
-        &["edit", "legacy-vpn", "--user", "x"],
-    ] {
-        let run = sb.run(&[args, &["--yes"]].concat());
-        assert_eq!(run.code, 1, "{args:?}");
-        assert!(run.stderr.contains("read-only"), "{}", run.stderr);
-    }
+    // Patterns cannot be changed; names from included files are taken.
+    let run = sb.run(&["rm", "*", "--yes"]);
+    assert_eq!(run.code, 1);
+    assert!(run.stderr.contains("read-only"), "{}", run.stderr);
     assert!(
         sb.run(&["add", "legacy-vpn", "--hostname", "x", "--yes"])
             .stderr
             .contains("already exists")
     );
+
+    // Editing changes the included file and leaves the main config alone.
+    let run = sb.run(&["edit", "legacy-vpn", "--user", "deploy", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.contains("  +     User deploy"));
+    assert!(
+        run.stdout
+            .contains("backup: ~/.ssh/sshcm-backups/config.d__work-"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(&work).unwrap(),
+        "Host legacy-vpn\n    HostName vpn.example.com\n    User deploy\n"
+    );
     assert_eq!(sb.config(), config);
 
-    // A new connection lands before the trailing `Host *`.
+    // A new connection lands in the main config, before the trailing `Host *`.
     let run = sb.run(&["add", "b", "--hostname", "b.example.com", "--yes"]);
     assert_eq!(run.code, 0, "{}", run.stderr);
-    assert_eq!(
-        sb.config(),
-        "Include config.d/*\n\nHost a\n    HostName a.example.com\n\nHost b\n    HostName b.example.com\n\nHost *\n    User me\n"
+    let with_b = "Include config.d/*\n\nHost a\n    HostName a.example.com\n\nHost b\n    HostName b.example.com\n\nHost *\n    User me\n";
+    assert_eq!(sb.config(), with_b);
+
+    // Removing says which file the block comes from.
+    let run = sb.run(&["rm", "legacy-vpn", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout
+            .contains("Will be removed from ~/.ssh/config.d/work")
     );
+    assert_eq!(fs::read_to_string(&work).unwrap(), "");
+    assert_eq!(sb.config(), with_b);
 }
 
 #[test]

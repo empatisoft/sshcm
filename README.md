@@ -154,10 +154,18 @@ hold for every write:
   passphrases; it only stores the path of a key file. It opens no network
   connections and has no telemetry or update check.
 
-Read-only entries: wildcard patterns such as `Host *` and blocks that come
-from `Include`d files are listed but cannot be edited or removed. `Match`
-blocks are kept and not listed. New connections are added after your last
-regular block, so a trailing `Host *` keeps applying to them.
+### Included files
+
+Connections in files pulled in with `Include` are listed together with the
+ones in your main config; `sshcm list` shows which file each comes from.
+Editing or removing such a connection rewrites that file, not the main config,
+with the same guarantees. Its backup goes to `~/.ssh/sshcm-backups` too, named
+after the file (`config.d/work` becomes `config.d__work-YYYYMMDD-HHMMSS`). New
+connections are always added to the main config, after your last regular
+block, so a trailing `Host *` keeps applying to them.
+
+Wildcard patterns such as `Host *` are listed read-only and cannot be edited
+or removed. `Match` blocks are kept and not listed.
 
 ## Settings
 
@@ -179,7 +187,6 @@ settings file. Command names and flags are the same in every language.
 
 ## Roadmap
 
-- v0.3: edit and remove connections inside `Include`d files
 - v0.5: full-screen terminal interface
 - v1.0: stable command line
 

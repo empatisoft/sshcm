@@ -60,8 +60,16 @@ pub fn proxy_short(proxy: &Proxy) -> String {
     }
 }
 
+/// The file a block lives in, with the home directory shortened to `~`.
+pub fn location(store: &Store, entry: &Entry) -> String {
+    match &entry.source {
+        Some(path) => collapse_tilde(&path.to_string_lossy(), store.home()),
+        None => store.display_path(),
+    }
+}
+
 /// Finds the connection to work on: by name when given, otherwise from a
-/// list. `editable` leaves out patterns and included files.
+/// list. Patterns are never offered.
 pub fn pick(store: &Store, alias: Option<String>, editable: bool, message: &str) -> Result<Entry> {
     if let Some(alias) = alias {
         let entry = store
@@ -126,10 +134,18 @@ pub fn report_saved(
     verify_alias: Option<&str>,
 ) {
     let mut line = format!("{} {headline}", style::green("✓"));
-    if let Some(path) = &report.backup {
-        let shown = collapse_tilde(&path.to_string_lossy(), store.home());
+    if !report.backups.is_empty() {
+        let shown: Vec<String> = report
+            .backups
+            .iter()
+            .map(|path| collapse_tilde(&path.to_string_lossy(), store.home()))
+            .collect();
         line.push_str("  ");
-        line.push_str(&style::dim(&trf("backup: {}", "yedek: {}", &[&shown])));
+        line.push_str(&style::dim(&trf(
+            "backup: {}",
+            "yedek: {}",
+            &[&shown.join(", ")],
+        )));
     }
     println!("{line}");
     match report.verification {

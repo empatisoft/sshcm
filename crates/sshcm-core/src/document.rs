@@ -51,9 +51,9 @@ impl Entry {
         &self.conn.alias
     }
 
-    /// Patterns and blocks from included files cannot be edited or removed.
+    /// Wildcard patterns cannot be edited or removed.
     pub fn read_only(&self) -> bool {
-        self.is_pattern || self.source.is_some()
+        self.is_pattern
     }
 }
 
@@ -68,10 +68,7 @@ impl fmt::Display for DocError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DocError::NotFound(a) => write!(f, "No connection named {a}."),
-            DocError::ReadOnly(a) => write!(
-                f,
-                "{a} is read-only: patterns and included files cannot be changed."
-            ),
+            DocError::ReadOnly(a) => write!(f, "{a} is read-only: patterns cannot be changed."),
         }
     }
 }

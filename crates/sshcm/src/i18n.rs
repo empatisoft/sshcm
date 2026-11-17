@@ -104,7 +104,7 @@ pub fn doc_error(err: &DocError) -> String {
     match err {
         DocError::NotFound(a) => format!("{a} adında bir bağlantı yok."),
         DocError::ReadOnly(a) => {
-            format!("{a} salt okunur: desenler ve dahil edilen dosyalar değiştirilemez.")
+            format!("{a} salt okunur: desenler değiştirilemez.")
         }
     }
 }

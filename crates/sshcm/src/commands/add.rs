@@ -80,7 +80,7 @@ pub fn run(ctx: &Ctx, alias: Option<String>, fields: &Fields) -> Result<()> {
         return Ok(());
     }
 
-    store.doc.add(&conn);
+    store.add(&conn);
     let report = store.save(&ctx.save_options(Some(&conn.alias)))?;
     report_saved(
         &trf("Saved {}", "{} kaydedildi", &[&conn.alias]),

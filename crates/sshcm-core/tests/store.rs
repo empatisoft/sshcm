@@ -75,7 +75,10 @@ fn first_save_creates_the_file_with_mode_600() {
     );
     assert_eq!(mode(&config), 0o600);
     assert_eq!(mode(&home.join(".ssh")), 0o700);
-    assert!(report.backup.is_none(), "nothing to back up on first write");
+    assert!(
+        report.backups.is_empty(),
+        "nothing to back up on first write"
+    );
     assert!(!store.is_new());
 }
 
@@ -120,7 +123,7 @@ fn every_write_leaves_a_backup_of_the_previous_content() {
     store.doc.remove("dev").unwrap();
     let report = store.save(&opts()).unwrap();
 
-    let backup = report.backup.expect("backup path");
+    let backup = report.backups.first().cloned().expect("backup path");
     assert_eq!(fs::read_to_string(&backup).unwrap(), BASIC);
     assert_eq!(mode(&backup), 0o600);
     assert_eq!(
@@ -262,8 +265,44 @@ fn non_utf8_config_is_refused() {
     ));
 }
 
+/// A home whose config includes `config.d/*` and `config-extra`.
+fn home_with_includes() -> Home {
+    let home = Home::new();
+    home.write_config(
+        "Include config.d/* config-extra\n\nHost bastion\n    HostName bastion.example.com\n\nHost *\n    User me\n",
+    );
+    fs::create_dir(home.path().join(".ssh/config.d")).unwrap();
+    fs::write(home.path().join(".ssh/config.d/work"), WORK).unwrap();
+    fs::write(home.path().join(".ssh/config-extra"), EXTRA).unwrap();
+    home
+}
+
+const WORK: &str = "\
+# Work machines
+Host legacy-vpn
+\tHostName vpn.example.com
+\tUser onur
+
+Host db
+\tHostName db.internal
+\tProxyJump bastion
+";
+
+const EXTRA: &str = "Host extra\n    HostName extra.example.com\n";
+
+fn backup_names(home: &Home) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(home.path().join(".ssh/sshcm-backups"))
+        .map(|dir| {
+            dir.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 #[test]
-fn included_files_are_listed_read_only_with_their_source() {
+fn included_files_are_listed_with_their_source() {
     let home = Home::new();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     fs::copy(fixtures.join("include-match.config"), home.config()).unwrap();
@@ -274,7 +313,7 @@ fn included_files_are_listed_read_only_with_their_source() {
     )
     .unwrap();
 
-    let mut store = home.store();
+    let store = home.store();
     let entries = store.entries();
     let names: Vec<&str> = entries.iter().map(|e| e.alias()).collect();
     assert_eq!(
@@ -290,19 +329,19 @@ fn included_files_are_listed_read_only_with_their_source() {
     );
 
     let vpn = store.find("legacy-vpn").unwrap();
-    assert!(vpn.read_only());
+    assert!(!vpn.read_only());
     assert_eq!(
         vpn.source.as_deref(),
         Some(home.path().join(".ssh/config.d/work.config").as_path())
     );
-    assert!(store.doc.remove("legacy-vpn").is_err());
 
+    // Patterns stay read-only; blocks of included files are editable.
     let editable: Vec<&str> = entries
         .iter()
         .filter(|e| !e.read_only())
         .map(|e| e.alias())
         .collect();
-    assert_eq!(editable, ["bastion", "app"]);
+    assert_eq!(editable, ["bastion", "app", "legacy-vpn"]);
 
     // The second name on a shared Host line also finds the entry.
     assert_eq!(
@@ -311,6 +350,205 @@ fn included_files_are_listed_read_only_with_their_source() {
     );
     // Names in included files count as taken.
     assert!(store.known(None).names.iter().any(|n| n == "legacy-vpn"));
+}
+
+#[test]
+fn editing_an_included_entry_rewrites_only_its_own_file() {
+    let home = home_with_includes();
+    let main_before = fs::read_to_string(home.config()).unwrap();
+    let work = home.path().join(".ssh/config.d/work");
+
+    let mut store = home.store();
+    let mut vpn = store.find("legacy-vpn").unwrap().conn;
+    vpn.user = Some("deploy".to_string());
+    vpn.port = Some(2222);
+    store.update("legacy-vpn", &vpn).unwrap();
+    assert!(store.is_modified());
+    let report = store.save(&opts()).unwrap();
+    assert!(!store.is_modified());
+
+    // The block keeps its tab indentation; the rest of the file is intact.
+    assert_eq!(
+        fs::read_to_string(&work).unwrap(),
+        WORK.replace("\tUser onur\n", "\tUser deploy\n\tPort 2222\n")
+    );
+    assert_eq!(mode(&work), 0o600);
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), main_before);
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config-extra")).unwrap(),
+        EXTRA
+    );
+
+    // One backup, of the included file, kept next to the main config.
+    assert_eq!(report.backups.len(), 1);
+    let backup = &report.backups[0];
+    assert_eq!(fs::read_to_string(backup).unwrap(), WORK);
+    assert_eq!(mode(backup), 0o600);
+    let names = backup_names(&home);
+    assert_eq!(names.len(), 1);
+    assert!(names[0].starts_with("config.d__work-"), "{names:?}");
+    // No backup directory appears inside the included directory, where the
+    // Include pattern would pick it up.
+    assert!(!home.path().join(".ssh/config.d/sshcm-backups").exists());
+}
+
+#[test]
+fn removing_an_included_entry_rewrites_only_its_own_file() {
+    let home = home_with_includes();
+    let main_before = fs::read_to_string(home.config()).unwrap();
+    let mut store = home.store();
+    store.remove("legacy-vpn").unwrap();
+    store.save(&opts()).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config.d/work")).unwrap(),
+        "Host db\n\tHostName db.internal\n\tProxyJump bastion\n"
+    );
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), main_before);
+    assert!(home.store().find("legacy-vpn").is_none());
+}
+
+#[test]
+fn new_connections_always_go_to_the_main_config() {
+    let home = home_with_includes();
+    let mut store = home.store();
+    store.add(&conn("new", "new.example.com"));
+    store.save(&opts()).unwrap();
+
+    assert!(fs::read_to_string(home.config()).unwrap().contains(
+        "Host bastion\n    HostName bastion.example.com\n\nHost new\n    HostName new.example.com\n\nHost *\n"
+    ));
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config.d/work")).unwrap(),
+        WORK
+    );
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config-extra")).unwrap(),
+        EXTRA
+    );
+}
+
+#[test]
+fn renaming_updates_jump_references_across_files() {
+    let home = home_with_includes();
+    let mut store = home.store();
+    assert_eq!(store.dependents("bastion"), ["db"]);
+    let mut bastion = store.find("bastion").unwrap().conn;
+    bastion.alias = "gate".to_string();
+    store.update("bastion", &bastion).unwrap();
+    let report = store.save(&opts()).unwrap();
+
+    assert!(
+        fs::read_to_string(home.config())
+            .unwrap()
+            .contains("Host gate\n")
+    );
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config.d/work")).unwrap(),
+        WORK.replace("ProxyJump bastion", "ProxyJump gate")
+    );
+    // Both files were rewritten, so both were backed up.
+    assert_eq!(report.backups.len(), 2);
+    let names = backup_names(&home);
+    assert!(names.iter().any(|n| n.starts_with("config-2")), "{names:?}");
+    assert!(
+        names.iter().any(|n| n.starts_with("config.d__work-")),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn a_changed_included_file_cancels_the_whole_write() {
+    let home = home_with_includes();
+    let main_before = fs::read_to_string(home.config()).unwrap();
+    let work = home.path().join(".ssh/config.d/work");
+
+    // The rename touches both files; only the included one changes on disk.
+    let mut store = home.store();
+    let mut bastion = store.find("bastion").unwrap().conn;
+    bastion.alias = "gate".to_string();
+    store.update("bastion", &bastion).unwrap();
+    let theirs = format!("{WORK}\nHost theirs\n\tHostName t.example.com\n");
+    fs::write(&work, &theirs).unwrap();
+
+    match store.save(&opts()) {
+        Err(Error::ChangedOnDisk(path)) => assert_eq!(path, work),
+        other => panic!("expected ChangedOnDisk, got {other:?}"),
+    }
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), main_before);
+    assert_eq!(fs::read_to_string(&work).unwrap(), theirs);
+    assert!(backup_names(&home).is_empty());
+}
+
+#[test]
+fn failed_ssh_check_restores_every_written_file() {
+    let home = home_with_includes();
+    let main_before = fs::read_to_string(home.config()).unwrap();
+    let mut store = Store::load(home.config(), home.path())
+        .unwrap()
+        .with_ssh_program("false");
+    let mut bastion = store.find("bastion").unwrap().conn;
+    bastion.alias = "gate".to_string();
+    store.update("bastion", &bastion).unwrap();
+
+    assert!(matches!(
+        store.save(&opts()),
+        Err(Error::VerifyFailed { .. })
+    ));
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), main_before);
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config.d/work")).unwrap(),
+        WORK
+    );
+}
+
+#[test]
+fn backups_of_files_with_similar_names_are_pruned_separately() {
+    // `config-extra-<time>` must not be counted as a backup of `config`.
+    let home = home_with_includes();
+    let keep = SaveOptions {
+        backup_keep: 2,
+        verify_alias: None,
+    };
+    let mut store = home.store();
+    for i in 0..4 {
+        let mut extra = store.find("extra").unwrap().conn;
+        extra.user = Some(format!("u{i}"));
+        store.update("extra", &extra).unwrap();
+        store.save(&keep).unwrap();
+        store.add(&conn(&format!("h{i}"), "h.example.com"));
+        store.save(&keep).unwrap();
+    }
+    let names = backup_names(&home);
+    let of = |prefix: &str| {
+        names
+            .iter()
+            .filter(|n| {
+                n.strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with("20"))
+            })
+            .count()
+    };
+    assert_eq!(of("config-"), 2, "{names:?}");
+    assert_eq!(of("config-extra-"), 2, "{names:?}");
+    assert_eq!(store.backups().unwrap().len(), 2);
+}
+
+#[test]
+fn patterns_in_included_files_stay_read_only() {
+    let home = Home::new();
+    home.write_config("Include extra\n");
+    fs::write(home.path().join(".ssh/extra"), "Host *.corp\n    User me\n").unwrap();
+    let mut store = home.store();
+    assert!(store.find("*.corp").unwrap().read_only());
+    assert!(matches!(
+        store.remove("*.corp"),
+        Err(sshcm_core::DocError::ReadOnly(_))
+    ));
+    assert!(matches!(
+        store.remove("missing"),
+        Err(sshcm_core::DocError::NotFound(_))
+    ));
 }
 
 #[test]

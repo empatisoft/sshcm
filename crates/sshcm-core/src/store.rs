@@ -3,8 +3,12 @@
 //! Every write follows the same steps: check that the file did not change
 //! since it was read, copy it to a timestamped backup, write the new content
 //! to a temporary file in the same directory, `fsync`, and `rename` it over
-//! the original. Afterwards `ssh -G` must accept the file, or the previous
+//! the original. Afterwards `ssh -G` must accept the result, or the previous
 //! content is put back.
+//!
+//! A save can touch several files: the main config and files it includes.
+//! All of them are checked before the first one is written, and all of them
+//! are restored if the check with ssh fails.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -15,8 +19,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::document::{Document, Entry, dependents};
-use crate::model::{Known, collapse_tilde, expand_tilde};
+use crate::document::{DocError, Document, Entry, dependents, is_pattern};
+use crate::model::{Connection, Known, collapse_tilde, expand_tilde};
 
 const BACKUP_DIR: &str = "sshcm-backups";
 const MAX_INCLUDE_DEPTH: usize = 16;
@@ -100,21 +104,40 @@ pub enum Verification {
 /// What a successful save did.
 #[derive(Debug, Clone)]
 pub struct SaveReport {
-    /// Backup of the previous content; `None` when the file was just created.
-    pub backup: Option<PathBuf>,
+    /// Backups of the previous content, one per file that was rewritten.
+    /// Empty when the only file written was just created.
+    pub backups: Vec<PathBuf>,
     pub verification: Verification,
 }
 
-/// The config file, the files it includes, and the way to write it back.
+/// A file pulled in by an `Include` line.
+#[derive(Debug, Clone)]
+struct Included {
+    path: PathBuf,
+    /// Content at read time.
+    original: String,
+    doc: Document,
+}
+
+/// One file to write during a save.
+struct Pending {
+    path: PathBuf,
+    /// The file behind a symlink, or `path` itself.
+    target: PathBuf,
+    original: Option<String>,
+    content: String,
+}
+
+/// The config file, the files it includes, and the way to write them back.
 #[derive(Debug, Clone)]
 pub struct Store {
     path: PathBuf,
     home: PathBuf,
     /// Content at read time; `None` when the file did not exist.
     original: Option<String>,
-    /// The main config. Edit this, then call [`Store::save`].
+    /// The main config. New connections are always added here.
     pub doc: Document,
-    included: Vec<(PathBuf, Document)>,
+    included: Vec<Included>,
     ssh: OsString,
 }
 
@@ -173,12 +196,19 @@ impl Store {
         self.original.is_none()
     }
 
+    /// True when the main config or an included file differs from what is
+    /// on disk.
+    pub fn is_modified(&self) -> bool {
+        self.doc.render() != self.original.as_deref().unwrap_or("")
+            || self.included.iter().any(|f| f.doc.render() != f.original)
+    }
+
     /// Blocks of the main config followed by blocks of included files.
     pub fn entries(&self) -> Vec<Entry> {
         let mut entries = self.doc.entries();
-        for (path, doc) in &self.included {
-            entries.extend(doc.entries().into_iter().map(|mut e| {
-                e.source = Some(path.clone());
+        for file in &self.included {
+            entries.extend(file.doc.entries().into_iter().map(|mut e| {
+                e.source = Some(file.path.clone());
                 e
             }));
         }
@@ -208,10 +238,15 @@ impl Store {
     /// `editing` is the alias being edited, whose names stay available to it.
     pub fn known(&self, editing: Option<&str>) -> Known {
         let entries = self.entries();
+        // The block an edit applies to: the first editable one with the name.
+        let own = editing.and_then(|alias| {
+            entries
+                .iter()
+                .position(|e| !e.is_pattern && e.patterns.iter().any(|p| p == alias))
+        });
         let mut known = Known::default();
-        for entry in &entries {
-            let own = editing.is_some_and(|a| entry.alias() == a && entry.source.is_none());
-            if own {
+        for (i, entry) in entries.iter().enumerate() {
+            if Some(i) == own {
                 // The other names on a shared `Host a b` line stay taken.
                 known.names.extend(
                     entry
@@ -239,48 +274,145 @@ impl Store {
         known
     }
 
-    /// Where backups of this config are kept.
-    pub fn backup_dir(&self) -> PathBuf {
-        self.path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(BACKUP_DIR)
+    /// The document that holds the editable block named `alias`: the main
+    /// config first, then included files in the order they were read.
+    fn doc_holding(&mut self, alias: &str) -> Result<&mut Document, DocError> {
+        if self.doc.block_text(alias).is_some() {
+            return Ok(&mut self.doc);
+        }
+        let read_only = self.entries().iter().any(|e| {
+            e.patterns.iter().any(|p| p == alias) && e.patterns.iter().any(|p| is_pattern(p))
+        });
+        match self
+            .included
+            .iter_mut()
+            .find(|f| f.doc.block_text(alias).is_some())
+        {
+            Some(file) => Ok(&mut file.doc),
+            None if read_only => Err(DocError::ReadOnly(alias.to_string())),
+            None => Err(DocError::NotFound(alias.to_string())),
+        }
     }
 
-    /// Writes `self.doc` to disk. See the module docs for the steps.
-    pub fn save(&mut self, opts: &SaveOptions) -> Result<SaveReport, Error> {
-        let content = self.doc.render();
-        // A symlinked config (dotfiles) is updated through the link.
-        let target = resolve_symlink(&self.path);
+    /// Text of the editable block named `alias`, from whichever file holds it.
+    pub fn block_text(&self, alias: &str) -> Option<String> {
+        self.doc
+            .block_text(alias)
+            .or_else(|| self.included.iter().find_map(|f| f.doc.block_text(alias)))
+    }
 
-        if read_optional(&target)? != self.original {
-            return Err(Error::ChangedOnDisk(self.path.clone()));
+    /// Adds a connection. New connections always go to the main config.
+    pub fn add(&mut self, conn: &Connection) {
+        self.doc.add(conn);
+    }
+
+    /// Updates the block named `alias` in the file it lives in. When the
+    /// alias changes, `ProxyJump` references are updated in every file.
+    pub fn update(&mut self, alias: &str, conn: &Connection) -> Result<(), DocError> {
+        self.doc_holding(alias)?.update(alias, conn)?;
+        if conn.alias != alias {
+            self.doc.rename_jump_host(alias, &conn.alias);
+            for file in &mut self.included {
+                file.doc.rename_jump_host(alias, &conn.alias);
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the block named `alias` from the file it lives in.
+    pub fn remove(&mut self, alias: &str) -> Result<(), DocError> {
+        self.doc_holding(alias)?.remove(alias)
+    }
+
+    /// Where backups are kept: next to the main config, for every file.
+    pub fn backup_dir(&self) -> PathBuf {
+        self.config_dir().join(BACKUP_DIR)
+    }
+
+    fn config_dir(&self) -> &Path {
+        self.path.parent().unwrap_or_else(|| Path::new("."))
+    }
+
+    /// The files whose content differs from what was read.
+    fn pending(&self) -> Vec<Pending> {
+        let mut pending = Vec::new();
+        let content = self.doc.render();
+        if content != self.original.as_deref().unwrap_or("") {
+            pending.push(Pending {
+                path: self.path.clone(),
+                // A symlinked config (dotfiles) is updated through the link.
+                target: resolve_symlink(&self.path),
+                original: self.original.clone(),
+                content,
+            });
+        }
+        for file in &self.included {
+            let content = file.doc.render();
+            if content != file.original {
+                pending.push(Pending {
+                    path: file.path.clone(),
+                    target: resolve_symlink(&file.path),
+                    original: Some(file.original.clone()),
+                    content,
+                });
+            }
+        }
+        pending
+    }
+
+    /// Writes every changed file to disk. See the module docs for the steps.
+    pub fn save(&mut self, opts: &SaveOptions) -> Result<SaveReport, Error> {
+        let pending = self.pending();
+
+        // Nothing is written unless every file is still as it was read.
+        for file in &pending {
+            if read_optional(&file.target)? != file.original {
+                return Err(Error::ChangedOnDisk(file.path.clone()));
+            }
         }
 
-        self.prepare_directory(&target)?;
-        let backup = match &self.original {
-            Some(original) => Some(self.write_backup(original)?),
-            None => None,
-        };
+        let mut backups = Vec::new();
+        for file in &pending {
+            if file.path == self.path {
+                self.prepare_directory(&file.target)?;
+            }
+            if let Some(original) = &file.original {
+                backups.push(self.write_backup(&file.path, original)?);
+            }
+        }
 
-        atomic_write(&target, content.as_bytes())?;
-
-        let verification = match self.verify(opts.verify_alias.as_deref()) {
-            Ok(v) => v,
+        let mut written: Vec<&Pending> = Vec::new();
+        let outcome = pending
+            .iter()
+            .try_for_each(|file| {
+                atomic_write(&file.target, file.content.as_bytes())?;
+                written.push(file);
+                Ok(())
+            })
+            .and_then(|()| self.verify(opts.verify_alias.as_deref()));
+        let verification = match outcome {
+            Ok(verification) => verification,
             Err(err) => {
-                // Put the previous state back. The backup stays on disk.
-                match &self.original {
-                    Some(original) => atomic_write(&target, original.as_bytes())?,
-                    None => fs::remove_file(&target).map_err(io_err(&target))?,
+                // Put the previous state back. The backups stay on disk.
+                for file in written {
+                    match &file.original {
+                        Some(original) => atomic_write(&file.target, original.as_bytes())?,
+                        None => fs::remove_file(&file.target).map_err(io_err(&file.target))?,
+                    }
                 }
                 return Err(err);
             }
         };
 
-        self.prune_backups(opts.backup_keep.max(1))?;
-        self.original = Some(content);
+        for file in &pending {
+            self.prune_backups(&file.path, opts.backup_keep.max(1))?;
+        }
+        self.original = Some(self.doc.render());
+        for file in &mut self.included {
+            file.original = file.doc.render();
+        }
         Ok(SaveReport {
-            backup,
+            backups,
             verification,
         })
     }
@@ -310,17 +442,27 @@ impl Store {
         Ok(())
     }
 
-    fn backup_prefix(&self) -> String {
-        let name = self
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "config".to_string());
+    /// The start of a file's backup names. The main config gives `config-`;
+    /// an included file gives its path relative to the config directory with
+    /// `/` written as `__`, for example `config.d__work-`.
+    fn backup_prefix(&self, path: &Path) -> String {
+        let name = if path == self.path {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "config".to_string())
+        } else {
+            path.strip_prefix(self.config_dir())
+                .unwrap_or(path)
+                .to_string_lossy()
+                .trim_start_matches('/')
+                .replace('/', "__")
+        };
         format!("{name}-")
     }
 
-    /// Copies the previous content to `sshcm-backups/config-YYYYMMDD-HHMMSS`.
-    fn write_backup(&self, original: &str) -> Result<PathBuf, Error> {
+    /// Copies the previous content of `path` to
+    /// `sshcm-backups/<name>-YYYYMMDD-HHMMSS`.
+    fn write_backup(&self, path: &Path, original: &str) -> Result<PathBuf, Error> {
         let dir = self.backup_dir();
         if !dir.exists() {
             DirBuilder::new()
@@ -329,78 +471,76 @@ impl Store {
                 .create(&dir)
                 .map_err(io_err(&dir))?;
         }
-        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let base = format!("{}{stamp}", self.backup_prefix());
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         // Two writes in the same second get a numeric suffix. The suffix
         // continues after the highest one in use, so that a name freed by
         // pruning is never reused for a newer backup.
-        let first = fs::read_dir(&dir)
-            .map_err(io_err(&dir))?
-            .filter_map(Result::ok)
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                match name.strip_prefix(&base)? {
-                    "" => Some(0),
-                    rest => rest.strip_prefix('-')?.parse::<u32>().ok(),
-                }
-            })
+        let first = self
+            .backups_of(path)?
+            .iter()
+            .filter_map(|(time, counter, _)| (*time == stamp).then_some(counter + 1))
             .max()
-            .map_or(0, |n| n + 1);
+            .unwrap_or(0);
+        let base = format!("{}{stamp}", self.backup_prefix(path));
         for n in first.. {
             let name = if n == 0 {
                 base.clone()
             } else {
                 format!("{base}-{n}")
             };
-            let path = dir.join(name);
+            let backup = dir.join(name);
             match OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
-                .open(&path)
+                .open(&backup)
             {
                 Ok(mut file) => {
-                    file.write_all(original.as_bytes()).map_err(io_err(&path))?;
-                    file.sync_all().map_err(io_err(&path))?;
-                    return Ok(path);
+                    file.write_all(original.as_bytes())
+                        .map_err(io_err(&backup))?;
+                    file.sync_all().map_err(io_err(&backup))?;
+                    return Ok(backup);
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(io_err(&path)(e)),
+                Err(e) => return Err(io_err(&backup)(e)),
             }
         }
         unreachable!("the loop above only ends by returning")
     }
 
-    /// Backups of this config, oldest first.
-    pub fn backups(&self) -> Result<Vec<PathBuf>, Error> {
+    /// Backups of `path` as `(timestamp, same-second counter, file)`, oldest
+    /// first. Only names that are exactly prefix + timestamp (+ counter)
+    /// count, so `config-` never picks up backups of `config-extra`.
+    fn backups_of(&self, path: &Path) -> Result<Vec<(String, u32, PathBuf)>, Error> {
         let dir = self.backup_dir();
         if !dir.exists() {
             return Ok(Vec::new());
         }
-        let prefix = self.backup_prefix();
-        let mut found: Vec<(String, PathBuf)> = fs::read_dir(&dir)
+        let prefix = self.backup_prefix(path);
+        let mut found: Vec<(String, u32, PathBuf)> = fs::read_dir(&dir)
             .map_err(io_err(&dir))?
             .filter_map(Result::ok)
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().into_owned();
-                let stamp = name.strip_prefix(&prefix)?;
-                // Sort by timestamp, then by the same-second counter.
-                let (time, counter) = match stamp.match_indices('-').nth(1) {
-                    Some((i, _)) => (&stamp[..i], stamp[i + 1..].parse::<u32>().ok()?),
-                    None => (stamp, 0),
-                };
-                Some((format!("{time}-{counter:010}"), e.path()))
+                let (time, counter) = parse_stamp(name.strip_prefix(&prefix)?)?;
+                Some((time, counter, e.path()))
             })
             .collect();
         found.sort();
-        Ok(found.into_iter().map(|(_, path)| path).collect())
+        Ok(found)
     }
 
-    fn prune_backups(&self, keep: usize) -> Result<(), Error> {
-        let backups = self.backups()?;
+    /// Backups of the main config, oldest first.
+    pub fn backups(&self) -> Result<Vec<PathBuf>, Error> {
+        let found = self.backups_of(&self.path)?;
+        Ok(found.into_iter().map(|(_, _, path)| path).collect())
+    }
+
+    fn prune_backups(&self, path: &Path, keep: usize) -> Result<(), Error> {
+        let backups = self.backups_of(path)?;
         let excess = backups.len().saturating_sub(keep);
-        for path in &backups[..excess] {
-            fs::remove_file(path).map_err(io_err(path))?;
+        for (_, _, backup) in &backups[..excess] {
+            fs::remove_file(backup).map_err(io_err(backup))?;
         }
         Ok(())
     }
@@ -479,6 +619,23 @@ fn atomic_write(target: &Path, content: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Splits `YYYYMMDD-HHMMSS` or `YYYYMMDD-HHMMSS-<n>` into timestamp and
+/// counter. Anything else is not a backup name.
+fn parse_stamp(stamp: &str) -> Option<(String, u32)> {
+    let digits = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_digit());
+    let mut parts = stamp.split('-');
+    let (date, time) = (parts.next()?, parts.next()?);
+    let counter = match parts.next() {
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => n.parse().ok()?,
+        Some(_) => return None,
+        None => 0,
+    };
+    if parts.next().is_some() || !digits(date, 8) || !digits(time, 6) {
+        return None;
+    }
+    Some((format!("{date}-{time}"), counter))
+}
+
 /// Reads the files named by `Include` lines, depth first. Files that cannot
 /// be read are skipped, as ssh does for patterns that match nothing.
 fn load_includes(
@@ -486,7 +643,7 @@ fn load_includes(
     home: &Path,
     depth: usize,
     seen: &mut HashSet<PathBuf>,
-    out: &mut Vec<(PathBuf, Document)>,
+    out: &mut Vec<Included>,
 ) {
     if depth > MAX_INCLUDE_DEPTH {
         return;
@@ -505,12 +662,44 @@ fn load_includes(
             if !path.is_file() || !seen.insert(key) {
                 continue;
             }
-            let Ok(Some(text)) = read_optional(&path) else {
+            let Ok(Some(original)) = read_optional(&path) else {
                 continue;
             };
-            let included = Document::parse(&text);
-            out.push((path, included.clone()));
+            let included = Document::parse(&original);
+            out.push(Included {
+                path,
+                original,
+                doc: included.clone(),
+            });
             load_includes(&included, home, depth + 1, seen, out);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_stamp;
+
+    #[test]
+    fn backup_stamps_are_parsed_strictly() {
+        assert_eq!(
+            parse_stamp("20261116-204900"),
+            Some(("20261116-204900".to_string(), 0))
+        );
+        assert_eq!(
+            parse_stamp("20261116-204900-12"),
+            Some(("20261116-204900".to_string(), 12))
+        );
+        for bad in [
+            "",
+            "20261116",
+            "extra-20261116-204900",
+            "20261116-204900-",
+            "20261116-204900-x",
+            "20261116-204900-1-2",
+            "2026111-204900",
+        ] {
+            assert_eq!(parse_stamp(bad), None, "{bad}");
         }
     }
 }

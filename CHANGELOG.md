@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Connections in `Include`d files can be edited and removed. The change is
+  written to the file the connection lives in, with its own backup.
+- Renaming a connection updates `ProxyJump` references in included files too.
+- `sshcm list` shows a FILE column for connections from included files.
+
+### Changed
+
+- Only wildcard patterns are read-only now.
+- `sshcm-core`: `SaveReport::backup` is now `backups`, one per rewritten
+  file; `Entry::read_only` no longer covers included files. Use
+  `Store::add`, `Store::update` and `Store::remove` to edit across files.
+
+### Fixed
+
+- Backups of a file whose name starts with another file's name (for example
+  `config-extra` next to `config`) are no longer counted, and pruned, as
+  backups of the shorter name.
+
 ## [0.1.0] - 2026-11-17
 
 ### Added

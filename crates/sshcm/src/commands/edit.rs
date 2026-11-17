@@ -56,9 +56,11 @@ pub fn run(
         key_changed,
     )?;
 
-    let mut doc = store.doc.clone();
-    doc.update(&original, &conn)?;
-    if doc == store.doc {
+    // Apply the edit to a copy first: it gives the preview, and the real
+    // store stays untouched until the user confirms.
+    let mut edited = store.clone();
+    edited.update(&original, &conn)?;
+    if !edited.is_modified() {
         println!("{}", tr("No changes.", "Değişiklik yok."));
         return Ok(());
     }
@@ -75,18 +77,10 @@ pub fn run(
             &[&original]
         ))
     );
-    let new_text = doc.block_text(&conn.alias).unwrap_or_default();
+    let new_text = edited.block_text(&conn.alias).unwrap_or_default();
     print_changes(&diff_lines(&entry.text, &new_text));
     if conn.alias != original {
-        let dependents: Vec<String> = store
-            .doc
-            .entries()
-            .iter()
-            .filter(|e| {
-                e.alias() != original && e.conn.proxy.jump_hosts().contains(&original.as_str())
-            })
-            .map(|e| e.alias().to_string())
-            .collect();
+        let dependents = store.dependents(&original);
         if !dependents.is_empty() {
             println!(
                 "{}",
@@ -115,7 +109,7 @@ pub fn run(
         return Ok(());
     }
 
-    store.doc = doc;
+    store = edited;
     let report = store.save(&ctx.save_options(Some(&conn.alias)))?;
     report_saved(
         &trf("Saved {}", "{} kaydedildi", &[&conn.alias]),

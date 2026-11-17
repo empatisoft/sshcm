@@ -68,10 +68,7 @@ pub fn run(ctx: &Ctx, alias: Option<String>) -> Result<()> {
     }
     if let Some(source) = &entry.source {
         let path = collapse_tilde(&source.to_string_lossy(), &ctx.home);
-        rows.push((
-            tr("Source", "Kaynak"),
-            trf("{} (read-only)", "{} (salt okunur)", &[&path]),
-        ));
+        rows.push((tr("Included from", "Dahil edildiği dosya"), path));
     }
 
     let width = rows

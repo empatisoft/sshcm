@@ -2,7 +2,9 @@
 
 use sshcm_core::Change;
 
-use super::{Ctx, dry_run_note, nothing_changed, pick, print_changes, report_saved, warn};
+use super::{
+    Ctx, dry_run_note, location, nothing_changed, pick, print_changes, report_saved, warn,
+};
 use crate::error::Result;
 use crate::i18n::{tr, trf};
 use crate::{prompt, style};
@@ -25,7 +27,7 @@ pub fn run(ctx: &Ctx, alias: Option<String>) -> Result<()> {
         style::dim(&trf(
             "Will be removed from {}",
             "{} dosyasından silinecek",
-            &[&store.display_path()]
+            &[&location(&store, &entry)]
         ))
     );
     let block: Vec<(Change, String)> = entry
@@ -80,7 +82,7 @@ pub fn run(ctx: &Ctx, alias: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    store.doc.remove(&alias)?;
+    store.remove(&alias)?;
     let report = store.save(&ctx.save_options(None))?;
     report_saved(
         &trf("Removed {}", "{} silindi", &[&alias]),

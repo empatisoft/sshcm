@@ -40,19 +40,35 @@ pub fn run(ctx: &Ctx, tag: Option<&str>) -> Result<()> {
     }
 
     if !editable.is_empty() {
-        let mut rows: Vec<[String; 6]> =
-            vec![["ALIAS", "HOSTNAME", "USER", "PORT", "PROXY", "TAGS"].map(String::from)];
+        let mut rows: Vec<Vec<String>> = vec![
+            ["ALIAS", "HOSTNAME", "USER", "PORT", "PROXY", "TAGS", "FILE"]
+                .map(String::from)
+                .to_vec(),
+        ];
         rows.extend(editable.iter().map(|e| {
-            [
+            vec![
                 e.patterns.join(" "),
                 e.conn.hostname.clone().unwrap_or_default(),
                 e.conn.user.clone().unwrap_or_default(),
                 e.conn.effective_port().to_string(),
                 proxy_short(&e.conn.proxy),
                 e.conn.tags.join(", "),
+                // Only connections from included files name their file.
+                e.source
+                    .as_ref()
+                    .map(|path| collapse_tilde(&path.to_string_lossy(), &ctx.home))
+                    .unwrap_or_default(),
             ]
         }));
-        print_table(&rows);
+        // TAGS and FILE are only shown when some connection uses them.
+        let rows = drop_empty_columns(rows, &[5, 6]);
+        for (i, line) in table_lines(&rows).iter().enumerate() {
+            if i == 0 {
+                println!("{}", style::dim(line));
+            } else {
+                println!("{line}");
+            }
+        }
     }
 
     if !read_only.is_empty() {
@@ -60,18 +76,18 @@ pub fn run(ctx: &Ctx, tag: Option<&str>) -> Result<()> {
             println!();
         }
         println!("{}", style::dim(tr("Read-only", "Salt okunur")));
-        let rows: Vec<[String; 2]> = read_only
+        let rows: Vec<Vec<String>> = read_only
             .iter()
             .map(|e| {
                 let note = match &e.source {
                     Some(path) => trf(
-                        "included from {}",
-                        "{} dosyasından dahil edildi",
+                        "pattern in {}",
+                        "desen, {} içinde",
                         &[&collapse_tilde(&path.to_string_lossy(), &ctx.home)],
                     ),
                     None => tr("pattern", "desen").to_string(),
                 };
-                [e.patterns.join(" "), note]
+                vec![e.patterns.join(" "), note]
             })
             .collect();
         for line in table_lines(&rows) {
@@ -81,9 +97,28 @@ pub fn run(ctx: &Ctx, tag: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Removes the given columns when no row below the header has a value there.
+fn drop_empty_columns(rows: Vec<Vec<String>>, optional: &[usize]) -> Vec<Vec<String>> {
+    let unused: Vec<usize> = optional
+        .iter()
+        .copied()
+        .filter(|&col| rows.iter().skip(1).all(|row| row[col].is_empty()))
+        .collect();
+    rows.into_iter()
+        .map(|row| {
+            row.into_iter()
+                .enumerate()
+                .filter(|(col, _)| !unused.contains(col))
+                .map(|(_, cell)| cell)
+                .collect()
+        })
+        .collect()
+}
+
 /// Lays out rows in columns, two spaces apart, without trailing spaces.
-fn table_lines<const N: usize>(rows: &[[String; N]]) -> Vec<String> {
-    let widths: Vec<usize> = (0..N)
+fn table_lines(rows: &[Vec<String>]) -> Vec<String> {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
         .map(|col| {
             rows.iter()
                 .map(|row| row[col].chars().count())
@@ -93,56 +128,28 @@ fn table_lines<const N: usize>(rows: &[[String; N]]) -> Vec<String> {
         .collect();
     rows.iter()
         .map(|row| {
-            let cells: Vec<String> = (0..N).map(|col| pad(&row[col], widths[col])).collect();
+            let cells: Vec<String> = (0..columns)
+                .map(|col| pad(&row[col], widths[col]))
+                .collect();
             cells.join("  ").trim_end().to_string()
         })
         .collect()
-}
-
-/// Prints the table with a dimmed header row.
-fn print_table(rows: &[[String; 6]]) {
-    // Hide the TAGS column when no connection has tags.
-    let has_tags = rows.iter().skip(1).any(|row| !row[5].is_empty());
-    let lines = if has_tags {
-        table_lines(rows)
-    } else {
-        let narrow: Vec<[String; 5]> = rows
-            .iter()
-            .map(|r| {
-                [
-                    r[0].clone(),
-                    r[1].clone(),
-                    r[2].clone(),
-                    r[3].clone(),
-                    r[4].clone(),
-                ]
-            })
-            .collect();
-        table_lines(&narrow)
-    };
-    for (i, line) in lines.iter().enumerate() {
-        if i == 0 {
-            println!("{}", style::dim(line));
-        } else {
-            println!("{line}");
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn row(cells: &[&str]) -> Vec<String> {
+        cells.iter().map(|c| c.to_string()).collect()
+    }
+
     #[test]
     fn table_aligns_columns_without_trailing_spaces() {
         let rows = [
-            ["ALIAS".to_string(), "HOST".to_string(), "X".to_string()],
-            [
-                "a".to_string(),
-                "long.example.com".to_string(),
-                String::new(),
-            ],
-            ["üretim".to_string(), "h".to_string(), "y".to_string()],
+            row(&["ALIAS", "HOST", "X"]),
+            row(&["a", "long.example.com", ""]),
+            row(&["üretim", "h", "y"]),
         ];
         assert_eq!(
             table_lines(&rows),
@@ -151,6 +158,19 @@ mod tests {
                 "a       long.example.com",
                 "üretim  h                 y"
             ]
+        );
+    }
+
+    #[test]
+    fn unused_optional_columns_are_dropped() {
+        let rows = vec![
+            row(&["A", "B", "C"]),
+            row(&["1", "", ""]),
+            row(&["2", "", "x"]),
+        ];
+        assert_eq!(
+            drop_empty_columns(rows, &[1, 2]),
+            [row(&["A", "C"]), row(&["1", ""]), row(&["2", "x"])]
         );
     }
 }
