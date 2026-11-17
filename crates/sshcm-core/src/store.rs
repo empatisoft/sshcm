@@ -110,6 +110,19 @@ pub struct SaveReport {
     pub verification: Verification,
 }
 
+/// One backup in `sshcm-backups`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Backup {
+    /// The backup file.
+    pub path: PathBuf,
+    /// The config file it is a copy of.
+    pub file: PathBuf,
+    /// When it was taken, as `YYYYMMDD-HHMMSS` in local time.
+    pub time: String,
+    /// Order among backups taken in the same second.
+    pub counter: u32,
+}
+
 /// A file pulled in by an `Include` line.
 #[derive(Debug, Clone)]
 struct Included {
@@ -534,6 +547,63 @@ impl Store {
     pub fn backups(&self) -> Result<Vec<PathBuf>, Error> {
         let found = self.backups_of(&self.path)?;
         Ok(found.into_iter().map(|(_, _, path)| path).collect())
+    }
+
+    /// Backups of the main config and of every included file, newest first.
+    pub fn all_backups(&self) -> Result<Vec<Backup>, Error> {
+        let files = std::iter::once(&self.path).chain(self.included.iter().map(|f| &f.path));
+        let mut all = Vec::new();
+        for file in files {
+            for (time, counter, path) in self.backups_of(file)? {
+                all.push(Backup {
+                    path,
+                    file: file.clone(),
+                    time,
+                    counter,
+                });
+            }
+        }
+        // Names only order backups of one file; across files in the same
+        // second the file's modification time decides.
+        let written = |b: &Backup| fs::metadata(&b.path).and_then(|m| m.modified()).ok();
+        all.sort_by(|a, b| (&b.time, written(b), b.counter).cmp(&(&a.time, written(a), a.counter)));
+        Ok(all)
+    }
+
+    /// Puts the content of a backup into memory in place of the file it was
+    /// taken from. Nothing is written until [`Store::save`], which backs up
+    /// the current content first and checks the result with ssh like any
+    /// other change.
+    pub fn restore(&mut self, backup: &Backup) -> Result<(), Error> {
+        let text = read_optional(&backup.path)?.ok_or_else(|| Error::Io {
+            path: backup.path.clone(),
+            source: io::Error::from(io::ErrorKind::NotFound),
+        })?;
+        let doc = Document::parse(&text);
+        if backup.file == self.path {
+            self.doc = doc;
+        } else if let Some(file) = self.included.iter_mut().find(|f| f.path == backup.file) {
+            file.doc = doc;
+        } else {
+            return Err(Error::Io {
+                path: backup.file.clone(),
+                source: io::Error::from(io::ErrorKind::NotFound),
+            });
+        }
+        Ok(())
+    }
+
+    /// Current content of the main config or of an included file, as held
+    /// in memory.
+    pub fn content_of(&self, file: &Path) -> Option<String> {
+        if file == self.path {
+            Some(self.doc.render())
+        } else {
+            self.included
+                .iter()
+                .find(|f| f.path == file)
+                .map(|f| f.doc.render())
+        }
     }
 
     fn prune_backups(&self, path: &Path, keep: usize) -> Result<(), Error> {

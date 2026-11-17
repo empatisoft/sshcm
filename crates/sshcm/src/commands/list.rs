@@ -3,18 +3,23 @@
 use sshcm_core::Entry;
 use sshcm_core::model::collapse_tilde;
 
-use super::{Ctx, proxy_short};
+use super::{Ctx, entry_json, proxy_short};
 use crate::error::Result;
 use crate::i18n::{tr, trf};
 use crate::style::{self, pad};
 
-pub fn run(ctx: &Ctx, tag: Option<&str>) -> Result<()> {
+pub fn run(ctx: &Ctx, tag: Option<&str>, json: bool) -> Result<()> {
     let store = ctx.load()?;
     let entries: Vec<Entry> = store
         .entries()
         .into_iter()
         .filter(|e| tag.is_none_or(|t| e.conn.tags.iter().any(|x| x == t)))
         .collect();
+    if json {
+        let all: Vec<serde_json::Value> = entries.iter().map(|e| entry_json(&store, e)).collect();
+        println!("{}", serde_json::Value::Array(all));
+        return Ok(());
+    }
     let (read_only, editable): (Vec<&Entry>, Vec<&Entry>) =
         entries.iter().partition(|e| e.read_only());
 

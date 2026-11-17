@@ -118,6 +118,31 @@ fn wrap(text: &str, max: usize) -> Vec<String> {
     lines
 }
 
+/// Draws `lines` into `inner`, scrolled down by `wanted` lines at most as
+/// far as the content goes. Reports that limit through `max`, and marks the
+/// bottom border of `outer` while there is more below.
+fn draw_scrolled(
+    frame: &mut Frame,
+    outer: Rect,
+    inner: Rect,
+    lines: Vec<Line<'static>>,
+    wanted: usize,
+    max: &std::cell::Cell<usize>,
+    theme: Theme,
+) {
+    let limit = lines.len().saturating_sub(inner.height as usize);
+    max.set(limit);
+    let offset = wanted.min(limit);
+    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), inner);
+    if offset < limit && outer.height > 0 && outer.width > 12 {
+        let mark = Rect::new(outer.x + 1, outer.bottom() - 1, outer.width - 2, 1);
+        frame.render_widget(
+            Paragraph::new(Line::styled(" pgdn ↓ ", theme.dim())).alignment(Alignment::Right),
+            mark,
+        );
+    }
+}
+
 /// A rectangle of at most the given size in the middle of `area`.
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
@@ -246,7 +271,14 @@ fn draw_form_header(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme
             spans.push(Span::raw("  "));
             spans.push(Span::styled(entry.alias().to_string(), theme.dim()));
         }
-        None => spans.push(Span::raw(tr("Add connection", "Bağlantı ekle"))),
+        None => match &form.template {
+            Some(source) => {
+                spans.push(Span::raw(tr("Copy connection", "Bağlantıyı kopyala")));
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(source.alias.clone(), theme.dim()));
+            }
+            None => spans.push(Span::raw(tr("Add connection", "Bağlantı ekle"))),
+        },
     }
     draw_header(frame, area, spans, app, theme);
 }
@@ -323,6 +355,7 @@ fn draw_main_footer(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
                 ("a", tr("add", "ekle")),
                 ("e", tr("edit", "düzenle")),
                 ("d", tr("delete", "sil")),
+                ("c", tr("copy", "kopyala")),
                 ("/", tr("search", "ara")),
                 ("?", tr("help", "yardım")),
                 ("q", tr("quit", "çık")),
@@ -675,7 +708,15 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
             fit(&text, (inner.width as usize).saturating_sub(2))
         )));
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    draw_scrolled(
+        frame,
+        area,
+        inner,
+        lines,
+        app.detail_scroll,
+        &app.detail_max,
+        theme,
+    );
 }
 
 // ------------------------------------------------------------------ form --
@@ -838,7 +879,15 @@ fn draw_preview(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme: Th
             lines.push(Line::styled(part, theme.dim()));
         }
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+    draw_scrolled(
+        frame,
+        area,
+        inner,
+        lines,
+        form.preview_scroll,
+        &form.preview_max,
+        theme,
+    );
 }
 
 // ---------------------------------------------------------------- popups --
@@ -1243,6 +1292,11 @@ fn draw_help(frame: &mut Frame, area: Rect, theme: Theme) {
                 ("/", tr("Search", "Ara")),
                 ("enter", tr("Connect with ssh", "ssh ile bağlan")),
                 ("a", tr("Add a connection", "Bağlantı ekle")),
+                (
+                    "c",
+                    tr("Copy the selected connection", "Seçili bağlantıyı kopyala"),
+                ),
+                ("pgup pgdn", tr("Scroll the details", "Ayrıntıları kaydır")),
                 (
                     "e",
                     tr("Edit the selected connection", "Seçili bağlantıyı düzenle"),

@@ -1,11 +1,14 @@
 //! One module per subcommand, plus the pieces they share.
 
 pub mod add;
+pub mod backups;
 pub mod config;
 pub mod connect;
+pub mod copy;
 pub mod edit;
 pub mod list;
 pub mod rm;
+pub mod shell;
 pub mod show;
 
 use std::path::PathBuf;
@@ -176,19 +179,73 @@ pub fn warn(message: &str) {
 /// missing.
 pub fn warn_if_nc_missing(conn: &Connection) {
     if let Some(message) = nc_warning(conn) {
-        warn(message);
+        warn(&message);
     }
 }
 
-/// The warning to show for a connection whose proxy needs `nc` when `nc`
-/// is not installed.
-pub fn nc_warning(conn: &Connection) -> Option<&'static str> {
-    (conn.proxy.needs_nc() && !exec::on_path("nc")).then(|| {
-        tr(
-            "The nc command was not found. SOCKS5 and HTTP proxies need the OpenBSD netcat (package netcat-openbsd on Debian and Ubuntu).",
-            "nc komutu bulunamadı. SOCKS5 ve HTTP proxy için OpenBSD netcat gerekir (Debian ve Ubuntu'da netcat-openbsd paketi).",
-        )
+/// The warning to show for a connection whose proxy needs `nc`, when the
+/// `nc` on this machine is missing or cannot do it.
+pub fn nc_warning(conn: &Connection) -> Option<String> {
+    if !conn.proxy.needs_nc() {
+        return None;
+    }
+    match exec::nc_support() {
+        exec::Nc::Usable => None,
+        exec::Nc::Missing => Some(
+            tr(
+                "The nc command was not found. SOCKS5 and HTTP proxies need the OpenBSD netcat (package netcat-openbsd on Debian and Ubuntu).",
+                "nc komutu bulunamadı. SOCKS5 ve HTTP proxy için OpenBSD netcat gerekir (Debian ve Ubuntu'da netcat-openbsd paketi).",
+            )
+            .to_string(),
+        ),
+        exec::Nc::NoProxyOption => Some(
+            tr(
+                "The nc on this machine has no -X option, so this proxy will not work here. Install the OpenBSD netcat (netcat-openbsd on Debian and Ubuntu, openbsd-netcat on Arch, netcat on Fedora).",
+                "Bu makinedeki nc komutunda -X seçeneği yok, bu proxy burada çalışmaz. OpenBSD netcat kurun (Debian ve Ubuntu'da netcat-openbsd, Arch'ta openbsd-netcat, Fedora'da netcat).",
+            )
+            .to_string(),
+        ),
+    }
+}
+
+/// One connection as JSON. Keys follow the ssh_config keywords.
+pub fn entry_json(store: &Store, entry: &Entry) -> serde_json::Value {
+    let conn = &entry.conn;
+    let (jump, command) = match &conn.proxy {
+        Proxy::None => (None, None),
+        Proxy::Jump(hops) => (Some(hops.clone()), None),
+        other => (None, other.directive().map(|(_, value)| value)),
+    };
+    let other: Vec<serde_json::Value> = conn
+        .other
+        .iter()
+        .map(|(key, value)| serde_json::json!({ "key": key, "value": value }))
+        .collect();
+    serde_json::json!({
+        "alias": conn.alias,
+        "aliases": entry.patterns,
+        "hostname": conn.hostname,
+        "user": conn.user,
+        "port": conn.effective_port(),
+        "identity_file": conn.identity_file,
+        "proxy_jump": jump,
+        "proxy_command": command,
+        "description": conn.description,
+        "tags": conn.tags,
+        "other": other,
+        "file": location_path(store, entry),
+        "read_only": entry.read_only(),
     })
+}
+
+/// The file a block lives in, as a full path.
+fn location_path(store: &Store, entry: &Entry) -> String {
+    entry
+        .source
+        .as_deref()
+        .unwrap_or(store.path())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Asks whether to connect right away, and hands over to ssh on yes.

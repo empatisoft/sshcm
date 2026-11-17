@@ -1,5 +1,7 @@
 //! The add/edit form: field values, live validation and the preview.
 
+use std::cell::Cell;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use sshcm_core::model::{
     collapse_tilde, expand_tilde, parse_port, parse_tags, validate, validate_alias,
@@ -111,22 +113,38 @@ pub struct Form {
     keys: Vec<String>,
     /// Field texts and proxy as the form opened.
     initial: (Vec<String>, Proxy),
+    /// Lines the preview is scrolled down by.
+    pub preview_scroll: usize,
+    /// How far the preview can scroll; set while drawing.
+    pub preview_max: Cell<usize>,
+    /// The connection a copy starts from; `None` otherwise.
+    pub template: Option<Connection>,
 }
 
 impl Form {
     pub fn add(ctx: &Ctx) -> Form {
-        Form::new(ctx, None)
+        Form::new(ctx, None, None)
     }
 
     pub fn edit(ctx: &Ctx, entry: Entry) -> Form {
-        Form::new(ctx, Some(entry))
+        Form::new(ctx, Some(entry), None)
     }
 
-    fn new(ctx: &Ctx, original: Option<Entry>) -> Form {
-        let conn = original
+    /// A form for a new connection that starts with the settings of `entry`
+    /// and an empty alias.
+    pub fn copy(ctx: &Ctx, entry: Entry) -> Form {
+        Form::new(ctx, None, Some(entry.conn))
+    }
+
+    fn new(ctx: &Ctx, original: Option<Entry>, template: Option<Connection>) -> Form {
+        let mut conn = original
             .as_ref()
             .map(|e| e.conn.clone())
+            .or_else(|| template.clone())
             .unwrap_or_default();
+        if template.is_some() {
+            conn.alias.clear();
+        }
         let mut form = Form {
             alias: TextInput::new(&conn.alias),
             hostname: TextInput::new(conn.hostname.as_deref().unwrap_or("")),
@@ -143,7 +161,10 @@ impl Form {
             discard: None,
             keys: keys::discover(&ctx.home),
             initial: (Vec::new(), Proxy::None),
+            preview_scroll: 0,
+            preview_max: Cell::new(0),
             original,
+            template,
         };
         form.initial = form.snapshot();
         form
@@ -183,10 +204,13 @@ impl Form {
     /// used yet (a port that is not a number, tags with bad characters) fall
     /// back to what the entry had, so the preview stays meaningful.
     pub fn connection(&self) -> Connection {
+        // Settings the form has no field for come along: from the block
+        // being edited, or from the one being copied.
         let mut conn = self
             .original
             .as_ref()
             .map(|e| e.conn.clone())
+            .or_else(|| self.template.clone())
             .unwrap_or_default();
         let optional = |input: &TextInput| Some(input.text().to_string()).filter(|v| !v.is_empty());
         conn.alias = self.alias.text().to_string();
@@ -211,9 +235,10 @@ impl Form {
     pub fn errors(&self, store: &Store) -> Vec<(Field, String)> {
         let mut errors: Vec<(Field, ValidationError)> = Vec::new();
         let known = store.known(self.original_alias());
-        let editing = self.original.is_some();
-        // When editing, a value that is already in the file is not judged:
-        // it must never stop the user from changing another field.
+        // When editing or copying, a value that is already in the file is
+        // not judged: it must never stop the user from changing another
+        // field.
+        let editing = self.original.is_some() || self.template.is_some();
         let check = |field: Field| !editing || self.changed(field);
 
         let alias = self.alias.text();
@@ -277,7 +302,10 @@ impl Form {
             && (editing || !self.hostname.is_empty())
             && let Err(err) = validate(
                 &self.connection(),
-                self.original.as_ref().map(|e| &e.conn),
+                self.original
+                    .as_ref()
+                    .map(|e| &e.conn)
+                    .or(self.template.as_ref()),
                 &known,
                 store.home(),
             )
@@ -431,6 +459,15 @@ impl Form {
             KeyCode::Esc if self.is_dirty() => self.discard = Some(false),
             KeyCode::Esc => return Outcome::Close,
             KeyCode::Char('s') if ctrl => return self.save(store, ctx),
+            KeyCode::PageDown => {
+                self.preview_scroll = (self.preview_scroll + 5).min(self.preview_max.get());
+            }
+            KeyCode::PageUp => {
+                self.preview_scroll = self
+                    .preview_scroll
+                    .min(self.preview_max.get())
+                    .saturating_sub(5);
+            }
             KeyCode::Tab | KeyCode::Down => self.focus = self.focus.step(true),
             KeyCode::BackTab | KeyCode::Up => self.focus = self.focus.step(false),
             KeyCode::Enter if matches!(self.focus, Field::Proxy | Field::IdentityFile) => {
@@ -483,7 +520,7 @@ impl Form {
         }
         match store.save(&ctx.save_options(Some(&conn.alias))) {
             Ok(report) => Outcome::Saved {
-                warning: nc_warning(&conn).map(str::to_string),
+                warning: nc_warning(&conn),
                 alias: conn.alias,
                 report,
             },

@@ -36,6 +36,38 @@ pub fn ssh(config: Option<&Path>, alias: &str, args: &[String]) -> AppError {
     }
 }
 
+/// What the `nc` on this machine can do for SOCKS5 and HTTP proxies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nc {
+    /// No `nc` on the `PATH`.
+    Missing,
+    /// An `nc` without `-X`: GNU netcat, ncat, BusyBox.
+    NoProxyOption,
+    /// The OpenBSD netcat, which the written `ProxyCommand` needs.
+    Usable,
+}
+
+/// Looks at the help text of `nc` for the `-X` option. Nothing is connected.
+pub fn nc_support() -> Nc {
+    if !on_path("nc") {
+        return Nc::Missing;
+    }
+    let Ok(output) = Command::new("nc")
+        .arg("-h")
+        .stdin(std::process::Stdio::null())
+        .output()
+    else {
+        return Nc::Missing;
+    };
+    // OpenBSD nc prints its usage to stderr, others to stdout.
+    let help = [output.stdout, output.stderr].concat();
+    if String::from_utf8_lossy(&help).contains("-X") {
+        Nc::Usable
+    } else {
+        Nc::NoProxyOption
+    }
+}
+
 /// True when `program` is found in one of the `PATH` directories.
 pub fn on_path(program: &str) -> bool {
     std::env::var_os("PATH")

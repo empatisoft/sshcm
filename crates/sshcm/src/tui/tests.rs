@@ -319,7 +319,15 @@ fn adding_a_connection_writes_the_block_and_selects_it() {
     );
     assert_eq!(f.selected(), "ihu");
     let status = f.app.status.clone().expect("status");
-    assert_eq!((status.tone, status.text.as_str()), (Tone::Ok, "Saved ihu"));
+    assert_eq!(status.tone, Tone::Ok);
+    // The status line also says where the previous file went.
+    assert!(
+        status
+            .text
+            .starts_with("Saved ihu · backup: ~/.ssh/sshcm-backups/config-"),
+        "{}",
+        status.text
+    );
     assert!(f.screen(110, 24).contains("✓ Saved ihu"));
 }
 
@@ -828,9 +836,11 @@ fn delete_removes_the_block_after_choosing_remove() {
         )
     );
     let status = f.app.status.clone().expect("status");
-    assert_eq!(
-        (status.tone, status.text.as_str()),
-        (Tone::Ok, "Removed staging")
+    assert_eq!(status.tone, Tone::Ok);
+    assert!(
+        status.text.starts_with("Removed staging · backup: "),
+        "{}",
+        status.text
     );
     assert_eq!(f.app.connection_count(), 3);
     assert!(f.dir.path().join(".ssh/sshcm-backups").is_dir());
@@ -860,7 +870,8 @@ fn main_screen_layout() {
     );
     assert!(screen.contains("Config block"), "{screen}");
     assert!(
-        lines[23].ends_with("enter connect  a add  e edit  d delete  / search  ? help  q quit"),
+        lines[23]
+            .ends_with("enter connect  a add  e edit  d delete  c copy  / search  ? help  q quit"),
         "{screen}"
     );
 }
@@ -930,4 +941,184 @@ fn long_lists_scroll_with_the_selection() {
     assert!(!screen.contains("h00 "), "{screen}");
     f.press(KeyCode::End);
     assert!(f.screen(100, 12).contains("❯ h39"));
+}
+
+// ------------------------------------------------------------------ copy --
+
+#[test]
+fn copying_starts_a_new_connection_from_the_selected_one() {
+    let mut f = Fixture::new(CONFIG);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Char('c'));
+    let screen = f.screen(110, 24);
+    assert!(screen.contains("Copy connection  web-prod"), "{screen}");
+    // Everything but the alias is filled in, including settings the form
+    // has no field for.
+    assert!(screen.contains("+     ServerAliveInterval 60"), "{screen}");
+
+    // Nothing typed yet: Esc closes without asking.
+    f.press(KeyCode::Esc);
+    assert!(matches!(f.app.screen, Screen::Main));
+
+    f.press(KeyCode::Char('c'));
+    f.chars("web-prod");
+    assert!(
+        f.screen(110, 24)
+            .contains("A connection named web-prod already")
+    );
+    f.chars("-2");
+    f.ctrl('s');
+    assert!(
+        matches!(f.app.screen, Screen::Main),
+        "{}",
+        f.screen(110, 24)
+    );
+    let added = "# sshcm:tags prod, web\nHost web-prod-2\n    HostName 10.0.2.10\n    User deploy\n    ProxyJump bastion\n    ServerAliveInterval 60\n\n";
+    assert_eq!(
+        f.config(),
+        CONFIG.replace("Host *\n", &format!("{added}Host *\n"))
+    );
+    assert_eq!(f.selected(), "web-prod-2");
+}
+
+#[test]
+fn patterns_cannot_be_copied() {
+    let mut f = Fixture::new(CONFIG);
+    f.press(KeyCode::End);
+    f.press(KeyCode::Char('c'));
+    assert!(matches!(f.app.screen, Screen::Main));
+    assert_eq!(
+        f.app.status.clone().expect("status").text,
+        "* is a pattern and is read-only."
+    );
+}
+
+// ------------------------------------------------------------- scrolling --
+
+#[test]
+fn details_scroll_when_they_do_not_fit() {
+    let mut f = Fixture::new(CONFIG);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Down);
+    // 10 rows: the config block of web-prod does not fit.
+    let top = f.screen(110, 10);
+    assert!(top.contains("Alias             web-prod"), "{top}");
+    assert!(!top.contains("ServerAliveInterval 60\n"), "{top}");
+    assert!(top.contains("pgdn ↓"), "{top}");
+
+    f.press(KeyCode::PageDown);
+    f.press(KeyCode::PageDown);
+    f.press(KeyCode::PageDown);
+    let bottom = f.screen(110, 10);
+    assert!(!bottom.contains("Alias             web-prod"), "{bottom}");
+    assert!(bottom.contains("      ServerAliveInterval 60"), "{bottom}");
+    assert!(!bottom.contains("pgdn ↓"), "{bottom}");
+
+    f.press(KeyCode::PageUp);
+    f.press(KeyCode::PageUp);
+    f.press(KeyCode::PageUp);
+    assert_eq!(f.screen(110, 10), top);
+
+    // Moving to another connection starts at the top again.
+    f.press(KeyCode::PageDown);
+    f.press(KeyCode::Up);
+    assert!(f.screen(110, 10).contains("Alias             db-prod"));
+
+    // With enough room nothing scrolls and no marker is shown.
+    f.press(KeyCode::PageDown);
+    assert!(!f.screen(110, 30).contains("pgdn ↓"));
+    assert!(f.screen(110, 30).contains("Alias             db-prod"));
+}
+
+#[test]
+fn the_form_preview_scrolls() {
+    let mut f = Fixture::new(CONFIG);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Char('e'));
+    let top = f.screen(110, 7);
+    assert!(top.contains("pgdn ↓"), "{top}");
+    assert!(!top.contains("ServerAliveInterval"), "{top}");
+    f.press(KeyCode::PageDown);
+    assert!(f.screen(110, 7).contains("ServerAliveInterval 60"));
+    f.press(KeyCode::PageUp);
+    assert_eq!(f.screen(110, 7), top);
+}
+
+// --------------------------------------------------------------- Turkish --
+
+#[test]
+fn every_screen_is_drawn_in_turkish() {
+    use crate::i18n::{Lang, with_lang};
+
+    with_lang(Lang::Tr, || {
+        let mut f = Fixture::new(CONFIG);
+        let screen = f.screen(110, 24);
+        assert!(screen.contains("4 bağlantı"), "{screen}");
+        assert!(screen.contains("┌ Bağlantılar "), "{screen}");
+        assert!(screen.contains("Salt okunur"), "{screen}");
+        // Labels are longer than in English and must still line up.
+        assert!(
+            screen.contains("Anahtar dosyası   ~/.ssh/id_ed25519"),
+            "{screen}"
+        );
+        assert!(screen.contains("Config bloğu"), "{screen}");
+        assert!(
+            screen.contains("enter bağlan  a ekle  e düzenle  d sil"),
+            "{screen}"
+        );
+
+        f.press(KeyCode::Char('e'));
+        f.press(KeyCode::Tab);
+        f.press(KeyCode::Tab);
+        f.press(KeyCode::Tab);
+        f.chars("70000");
+        let screen = f.screen(110, 24);
+        assert!(screen.contains("Bağlantıyı düzenle  bastion"), "{screen}");
+        assert!(screen.contains("┌ Önizleme "), "{screen}");
+        assert!(screen.contains("❯ Port            70000"), "{screen}");
+        assert!(
+            screen.contains("Port 1 ile 65535 arasında olmalıdır."),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("  Anahtar dosyası ~/.ssh/id_ed25519"),
+            "{screen}"
+        );
+        assert!(screen.contains("! 1 alan düzeltilmeli"), "{screen}");
+
+        f.press(KeyCode::Esc);
+        let screen = f.screen(110, 24);
+        assert!(screen.contains("Değişiklikler atılsın mı?"), "{screen}");
+        f.press(KeyCode::Char('y'));
+
+        f.press(KeyCode::Char('d'));
+        let screen = f.screen(110, 24);
+        assert!(screen.contains("bastion silinsin mi?"), "{screen}");
+        assert!(screen.contains("Vazgeç"), "{screen}");
+        assert!(
+            screen.contains("2 bağlantı bastion kaydını atlama sunucusu"),
+            "{screen}"
+        );
+        f.press(KeyCode::Esc);
+
+        f.press(KeyCode::Char('?'));
+        assert!(f.screen(110, 34).contains("Klavye kısayolları"));
+        f.press(KeyCode::Esc);
+
+        f.press(KeyCode::End);
+        f.press(KeyCode::Char('e'));
+        assert_eq!(
+            f.app.status.clone().expect("status").text,
+            "* bir desendir ve salt okunurdur."
+        );
+    });
+
+    // The language was only switched for the closure above.
+    assert!(
+        Fixture::new(CONFIG)
+            .screen(110, 24)
+            .contains("4 connections")
+    );
 }

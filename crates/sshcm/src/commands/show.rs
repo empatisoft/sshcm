@@ -3,12 +3,12 @@
 use sshcm_core::Proxy;
 use sshcm_core::model::{DEFAULT_PORT, collapse_tilde};
 
-use super::{Ctx, pick};
+use super::{Ctx, entry_json, pick};
 use crate::error::Result;
 use crate::i18n::{tr, trf};
 use crate::style::{self, pad};
 
-pub fn run(ctx: &Ctx, alias: Option<String>) -> Result<()> {
+pub fn run(ctx: &Ctx, alias: Option<String>, json: bool) -> Result<()> {
     let store = ctx.load()?;
     let entry = pick(
         &store,
@@ -19,6 +19,10 @@ pub fn run(ctx: &Ctx, alias: Option<String>) -> Result<()> {
             "Hangi bağlantıyı görmek istiyorsunuz?",
         ),
     )?;
+    if json {
+        println!("{}", entry_json(&store, &entry));
+        return Ok(());
+    }
     let conn = &entry.conn;
     let none = || style::dim(tr("none", "yok"));
 

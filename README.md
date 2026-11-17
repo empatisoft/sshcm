@@ -66,13 +66,17 @@ the connection from a searchable list.
 | Command | What it does |
 | --- | --- |
 | `sshcm` | Full-screen interface |
-| `sshcm list [--tag <tag>]` | Print the connections as a table |
-| `sshcm show [alias]` | Show every setting of one connection |
+| `sshcm list [--tag <tag>] [--json]` | Print the connections as a table, or as JSON |
+| `sshcm show [alias] [--json]` | Show every setting of one connection |
 | `sshcm add [alias]` | Create a connection |
 | `sshcm edit [alias]` | Change a connection; shows a diff before saving |
+| `sshcm copy [alias] [new alias]` | Create a connection from an existing one |
 | `sshcm rm [alias]` | Delete a connection; the default answer is No |
 | `sshcm connect [alias] [-- ssh args]` | Connect with the system `ssh` |
 | `sshcm config [get\|set] ...` | sshcm's own settings |
+| `sshcm backups` | List the backups of the config |
+| `sshcm restore [backup]` | Put a backup back; shows the difference first |
+| `sshcm completions <shell>` | Print a completion script (bash, zsh, fish, ...) |
 
 Global flags:
 
@@ -114,7 +118,9 @@ sshcm  4 connections                                                            
 | `Enter` | Connect to the selected connection |
 | `a` | Add a connection |
 | `e` | Edit the selected connection |
+| `c` | Copy the selected connection into a new one |
 | `d` | Remove the selected connection; "Cancel" is selected by default |
+| `PgUp` / `PgDn` | Scroll the details, or the preview in the form |
 | `Tab` / `Shift+Tab` | Next / previous field in the form |
 | `Enter` on Proxy or Identity file | Open the picker for that field |
 | `Ctrl+S` | Save the form |
@@ -146,8 +152,23 @@ Flags for `add` and `edit`: `--hostname`, `--user`, `--port`,
 `--identity-file`, `--desc`, `--tags`, and one of `--jump`, `--socks5`,
 `--http-proxy`, `--proxy-command`, `--no-proxy`.
 
+`list --json` and `show --json` print the connections for other programs.
+The keys follow the ssh_config keywords:
+
+```sh
+sshcm list --json | jq -r '.[] | select(.tags | index("prod")) | .alias'
+```
+
 Exit codes: `0` success, `1` error, `130` cancelled with Esc or Ctrl+C.
 `connect` exits with ssh's own exit code.
+
+### Shell completions
+
+```sh
+sshcm completions zsh > ~/.zfunc/_sshcm        # zsh: a directory in $fpath
+sshcm completions bash > ~/.local/share/bash-completion/completions/sshcm
+sshcm completions fish > ~/.config/fish/completions/sshcm.fish
+```
 
 ## Proxy
 
@@ -161,7 +182,10 @@ Exit codes: `0` success, `1` error, `130` cancelled with Esc or Ctrl+C.
 
 sshcm refuses jump hosts that would form a loop, and warns before you remove a
 connection that others jump through. SOCKS5 and HTTP proxies need the OpenBSD
-`nc`: it ships with macOS; on Debian and Ubuntu install `netcat-openbsd`.
+`nc`: it ships with macOS; on Debian and Ubuntu install `netcat-openbsd`
+(`openbsd-netcat` on Arch, `netcat` on Fedora). Other netcats (GNU netcat,
+ncat, BusyBox) have no `-X` option; sshcm checks which one you have and warns
+before saving such a proxy.
 
 ## Description and tags
 
@@ -189,8 +213,9 @@ hold for every write:
   file cannot occur.
 - **Backups.** Before each write the file is copied to
   `~/.ssh/sshcm-backups/config-YYYYMMDD-HHMMSS`. The last 10 are kept; change
-  that with `sshcm config set backup_keep 20`. To restore, copy a backup over
-  `~/.ssh/config`.
+  that with `sshcm config set backup_keep 20`. `sshcm backups` lists them and
+  `sshcm restore` puts one back after showing what would change; the content
+  it replaces is backed up too, so a restore can be undone.
 - **Checked by ssh.** After writing, `ssh -G <alias>` must accept the file. If
   it does not, the previous content is restored and the error is shown.
 - **No surprises from other programs.** If the file changed on disk since

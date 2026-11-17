@@ -68,17 +68,22 @@ fn run() -> Result<()> {
 
     match cli.command {
         None => tui::run(&ctx),
-        Some(Cmd::List { tag }) => commands::list::run(&ctx, tag.as_deref()),
-        Some(Cmd::Show { alias }) => commands::show::run(&ctx, alias),
+        Some(Cmd::List { tag, json }) => commands::list::run(&ctx, tag.as_deref(), json),
+        Some(Cmd::Show { alias, json }) => commands::show::run(&ctx, alias, json),
         Some(Cmd::Add { alias, fields }) => commands::add::run(&ctx, alias, &fields),
         Some(Cmd::Edit {
             alias,
             rename,
             fields,
         }) => commands::edit::run(&ctx, alias, rename, &fields),
+        Some(Cmd::Copy { alias, new_alias }) => commands::copy::run(&ctx, alias, new_alias),
         Some(Cmd::Rm { alias }) => commands::rm::run(&ctx, alias),
         Some(Cmd::Connect { alias, ssh_args }) => commands::connect::run(&ctx, alias, &ssh_args),
         Some(Cmd::Config { action }) => commands::config::run(&ctx, action),
+        Some(Cmd::Backups) => commands::backups::list(&ctx),
+        Some(Cmd::Restore { backup }) => commands::backups::restore(&ctx, backup),
+        Some(Cmd::Completions { shell }) => commands::shell::completions(shell),
+        Some(Cmd::Man) => commands::shell::man(),
     }
 }
 

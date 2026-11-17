@@ -673,3 +673,267 @@ fn non_utf8_config_is_refused() {
     assert_eq!(run.code, 1);
     assert!(run.stderr.contains("not valid UTF-8"));
 }
+
+// ------------------------------------------------------------------ 0.4 --
+
+#[test]
+fn copy_creates_a_connection_with_the_same_settings() {
+    let sb = Sandbox::new();
+    sb.write_config(
+        "# sshcm:tags prod\nHost web\n    HostName 10.0.2.10\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n    ServerAliveInterval 60\n",
+    );
+    let run = sb.run(&["copy", "web", "web2", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.contains("  + Host web2"));
+    assert_eq!(
+        sb.config(),
+        "# sshcm:tags prod\nHost web\n    HostName 10.0.2.10\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n    ServerAliveInterval 60\n\n\
+         # sshcm:tags prod\nHost web2\n    HostName 10.0.2.10\n    IdentityFile ~/.ssh/a\n    IdentityFile ~/.ssh/b\n    ServerAliveInterval 60\n"
+    );
+
+    let before = sb.config();
+    for (args, message) in [
+        (&["copy", "web", "web2"][..], "already exists"),
+        (&["copy", "web", "bad name"], "cannot contain spaces"),
+        (&["copy", "nope", "x"], "No connection named nope"),
+    ] {
+        let run = sb.run(&[args, &["--yes"]].concat());
+        assert_eq!(run.code, 1, "{args:?}");
+        assert!(run.stderr.contains(message), "{args:?}: {}", run.stderr);
+    }
+    assert_eq!(sb.run(&["copy", "web", "web3", "--dry-run"]).code, 0);
+    assert_eq!(sb.config(), before);
+}
+
+#[test]
+fn list_and_show_print_json() {
+    let sb = Sandbox::new();
+    sb.seed();
+    sb.run(&[
+        "edit",
+        "staging",
+        "--socks5",
+        "10.0.0.1:1080",
+        "--port",
+        "2222",
+        "--yes",
+    ]);
+
+    let run = sb.run(&["list", "--json"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let list: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid JSON");
+    let list = list.as_array().expect("an array");
+    assert_eq!(list.len(), 3);
+    let web = &list[1];
+    assert_eq!(web["alias"], "web");
+    assert_eq!(web["hostname"], "10.0.2.10");
+    assert_eq!(web["user"], serde_json::Value::Null);
+    assert_eq!(web["port"], 22);
+    assert_eq!(web["proxy_jump"], serde_json::json!(["bastion"]));
+    assert_eq!(web["proxy_command"], serde_json::Value::Null);
+    assert_eq!(web["tags"], serde_json::json!(["prod", "web"]));
+    assert_eq!(web["read_only"], false);
+    assert_eq!(web["file"], sb.config_path().to_str().unwrap());
+    assert_eq!(list[2]["port"], 2222);
+    assert_eq!(list[2]["proxy_command"], "nc -X 5 -x 10.0.0.1:1080 %h %p");
+
+    let run = sb.run(&["list", "--json", "--tag", "prod"]);
+    let tagged: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(tagged.as_array().unwrap().len(), 1);
+    // An empty result is an empty array, not a sentence.
+    assert_eq!(sb.run(&["list", "--json", "--tag", "nope"]).stdout, "[]\n");
+
+    let run = sb.run(&["show", "web", "--json"]);
+    let shown: serde_json::Value = serde_json::from_str(&run.stdout).expect("valid JSON");
+    assert_eq!(&shown, web);
+}
+
+#[test]
+fn backups_are_listed_and_restored() {
+    let sb = Sandbox::new();
+    assert_eq!(sb.run(&["backups"]).stdout, "There are no backups yet.\n");
+    assert_eq!(sb.run(&["restore", "--yes"]).code, 1);
+
+    sb.seed();
+    assert_eq!(sb.run(&["rm", "staging", "--yes"]).code, 0);
+    let damaged = sb.config();
+
+    let run = sb.run(&["backups"]);
+    let lines: Vec<&str> = run.stdout.lines().collect();
+    // Three writes after the first one: two adds and the remove.
+    assert_eq!(lines.len(), 4, "{}", run.stdout);
+    assert!(lines[0].starts_with("TAKEN"), "{}", run.stdout);
+    assert!(
+        lines[1].contains("~/.ssh/config  ~/.ssh/sshcm-backups/config-"),
+        "{}",
+        run.stdout
+    );
+
+    // The newest backup holds the file as it was before the remove.
+    let newest = lines[1]
+        .rsplit("  ")
+        .next()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let run = sb.run(&["restore", newest, "--dry-run"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(run.stdout.contains("  + Host staging"), "{}", run.stdout);
+    assert_eq!(sb.config(), damaged);
+
+    let run = sb.run(&["restore", newest, "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("Restored ~/.ssh/config"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(sb.config(), SEEDED);
+    // Restoring is itself backed up, so it can be undone.
+    assert_eq!(sb.run(&["backups"]).stdout.lines().count(), 5);
+
+    let run = sb.run(&["restore", newest, "--yes"]);
+    assert!(
+        run.stdout
+            .contains("already has the content of this backup"),
+        "{}",
+        run.stdout
+    );
+    let run = sb.run(&["restore", "nope", "--yes"]);
+    assert_eq!(run.code, 1);
+    assert!(run.stderr.contains("No backup named nope"));
+}
+
+#[test]
+fn completions_and_man_page_are_generated() {
+    let sb = Sandbox::new();
+    for (shell, marker) in [
+        ("bash", "_sshcm"),
+        ("zsh", "#compdef sshcm"),
+        ("fish", "complete -c sshcm"),
+    ] {
+        let run = sb.run(&["completions", shell]);
+        assert_eq!(run.code, 0, "{shell}");
+        assert!(run.stdout.contains(marker), "{shell}");
+        assert!(run.stdout.contains("restore"), "{shell}");
+    }
+    assert_eq!(sb.run(&["completions", "nope"]).code, 2);
+    let run = sb.run(&["man"]);
+    assert!(run.stdout.contains(".TH sshcm 1"));
+}
+
+#[test]
+fn help_headings_follow_the_language() {
+    let sb = Sandbox::new();
+    let en = sb.run(&["--help"]).stdout;
+    for text in [
+        "Usage: sshcm",
+        "Commands:",
+        "Options:",
+        "Print help",
+        "Print version",
+    ] {
+        assert!(en.contains(text), "{text}: {en}");
+    }
+    let tr = sb.run(&["--help", "--lang", "tr"]).stdout;
+    for text in [
+        "Kullanım: sshcm",
+        "Komutlar:",
+        "Seçenekler:",
+        "Yardımı göster",
+        "Sürümü göster",
+    ] {
+        assert!(tr.contains(text), "{text}: {tr}");
+    }
+    let tr = sb.run(&["edit", "-h", "--lang", "tr"]).stdout;
+    assert!(
+        tr.contains("Argümanlar:") && tr.contains("Seçenekler:"),
+        "{tr}"
+    );
+    assert_eq!(sb.run(&["--version"]).stdout, sb.run(&["-V"]).stdout);
+    assert!(sb.run(&["-V"]).stdout.starts_with("sshcm "));
+}
+
+/// Puts a fake `nc` (and nothing else) on the PATH and adds a SOCKS5 proxy.
+fn add_socks_with_nc(sb: &Sandbox, nc_script: Option<&str>) -> Run {
+    let bin = sb.home().join("fake-bin");
+    fs::create_dir_all(&bin).unwrap();
+    if let Some(script) = nc_script {
+        let nc = bin.join("nc");
+        fs::write(&nc, script).unwrap();
+        fs::set_permissions(&nc, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let args = [
+        "add",
+        "a",
+        "--hostname",
+        "a.example.com",
+        "--socks5",
+        "10.0.0.1:1080",
+        "--dry-run",
+        "--yes",
+    ];
+    finish(sb.command().env("PATH", &bin).args(args).output().unwrap())
+}
+
+#[test]
+fn an_nc_without_proxy_support_is_reported() {
+    // GNU netcat, ncat and BusyBox have no -X.
+    let run = add_socks_with_nc(
+        &Sandbox::new(),
+        Some(
+            "#!/bin/sh\necho 'usage: nc [-46bCDdhklnrStUuvZz] [-I length] hostname port' >&2\nexit 1\n",
+        ),
+    );
+    assert!(run.stdout.contains("has no -X option"), "{}", run.stdout);
+
+    // The OpenBSD netcat prints its usage, with -X, to stderr.
+    let run = add_socks_with_nc(
+        &Sandbox::new(),
+        Some(
+            "#!/bin/sh\necho 'usage: nc [-46] [-X proxy_protocol] [-x proxy_address[:port]] [destination] [port]' >&2\nexit 1\n",
+        ),
+    );
+    assert!(!run.stdout.contains("-X option"), "{}", run.stdout);
+    assert!(!run.stdout.contains("not found"), "{}", run.stdout);
+
+    let run = add_socks_with_nc(&Sandbox::new(), None);
+    assert!(
+        run.stdout.contains("The nc command was not found."),
+        "{}",
+        run.stdout
+    );
+}
+
+/// With the OpenBSD netcat installed (macOS has it; CI installs it on
+/// Linux), saving a SOCKS5 proxy must not warn.
+#[test]
+fn the_real_openbsd_netcat_is_recognised() {
+    let help = Command::new("nc").arg("-h").output();
+    let supports_x = help.is_ok_and(|out| {
+        String::from_utf8_lossy(&[out.stdout, out.stderr].concat()).contains("-X")
+    });
+    if !supports_x {
+        // On CI this must not happen: the workflow installs netcat-openbsd.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "the nc on this CI machine has no -X option"
+        );
+        eprintln!("no OpenBSD netcat here; skipping");
+        return;
+    }
+    let sb = Sandbox::new();
+    let run = sb.run(&[
+        "add",
+        "a",
+        "--hostname",
+        "a.example.com",
+        "--socks5",
+        "10.0.0.1:1080",
+        "--yes",
+    ]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(!run.stdout.contains("-X option"), "{}", run.stdout);
+    assert!(!run.stdout.contains("not found"), "{}", run.stdout);
+}

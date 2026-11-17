@@ -22,6 +22,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # SOCKS5 and HTTP proxies are written as `nc -X ...`, which needs the
+      # OpenBSD netcat. macOS ships it; the tests check that it is recognised.
+      - name: Install the OpenBSD netcat
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

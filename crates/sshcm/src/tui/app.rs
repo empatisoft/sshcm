@@ -1,10 +1,13 @@
 //! The state of the full-screen interface and how keys change it. Nothing
 //! here touches the terminal, so all of it can be tested.
 
+use std::cell::Cell;
+
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use sshcm_core::{Entry, Store, Verification};
+use sshcm_core::model::collapse_tilde;
+use sshcm_core::{Entry, SaveReport, Store, Verification};
 
 use super::form::{Form, Outcome};
 use super::input::TextInput;
@@ -65,6 +68,10 @@ pub struct App {
     pub searching: bool,
     pub status: Option<Status>,
     pub screen: Screen,
+    /// Lines the detail panel is scrolled down by.
+    pub detail_scroll: usize,
+    /// How far the detail panel can scroll; set while drawing.
+    pub detail_max: Cell<usize>,
     matcher: Matcher,
 }
 
@@ -81,6 +88,8 @@ impl App {
             searching: false,
             status: None,
             screen: Screen::Main,
+            detail_scroll: 0,
+            detail_max: Cell::new(0),
             matcher: Matcher::new(Config::DEFAULT),
         };
         app.refresh(None);
@@ -217,6 +226,24 @@ impl App {
 
         self.status = None;
         match key.code {
+            KeyCode::PageDown => {
+                self.detail_scroll = (self.detail_scroll + 5).min(self.detail_max.get());
+                return Effect::None;
+            }
+            KeyCode::PageUp => {
+                // Start from where the panel really is: the limit shrinks when
+                // the terminal grows.
+                self.detail_scroll = self
+                    .detail_scroll
+                    .min(self.detail_max.get())
+                    .saturating_sub(5);
+                return Effect::None;
+            }
+            _ => {}
+        }
+        // Any other key may change what the detail panel shows.
+        self.detail_scroll = 0;
+        match key.code {
             KeyCode::Char('q') => return Effect::Quit,
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(false),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),
@@ -231,6 +258,15 @@ impl App {
             }
             KeyCode::Char('?') => self.screen = Screen::Help,
             KeyCode::Char('a') => self.screen = Screen::Form(Box::new(Form::add(&self.ctx))),
+            KeyCode::Char('c') => {
+                if let Some(entry) = self.current().cloned() {
+                    if entry.is_pattern {
+                        self.read_only_notice();
+                    } else {
+                        self.screen = Screen::Form(Box::new(Form::copy(&self.ctx, entry)));
+                    }
+                }
+            }
             KeyCode::Enter => {
                 if let Some(entry) = self.current() {
                     if entry.is_pattern {
@@ -330,11 +366,7 @@ impl App {
         match result {
             Ok(report) => {
                 self.refresh(None);
-                self.saved_status(
-                    trf("Removed {}", "{} silindi", &[alias]),
-                    report.verification,
-                    None,
-                );
+                self.saved_status(trf("Removed {}", "{} silindi", &[alias]), &report, None);
             }
             Err(message) => {
                 self.reload(None);
@@ -343,13 +375,16 @@ impl App {
         }
     }
 
-    fn saved_status(&mut self, text: String, verification: Verification, warning: Option<String>) {
-        match verification {
-            Verification::Passed => match warning {
-                Some(warning) => self.set_status(Tone::Warn, format!("{text} · {warning}")),
-                None => self.set_status(Tone::Ok, text),
-            },
-            Verification::Skipped => self.set_status(
+    /// The status line after a write: what happened, where the backup is,
+    /// and anything that needs attention.
+    fn saved_status(&mut self, text: String, report: &SaveReport, warning: Option<String>) {
+        let mut text = text;
+        if let Some(backup) = report.backups.first() {
+            let path = collapse_tilde(&backup.to_string_lossy(), &self.ctx.home);
+            text.push_str(&format!(" · {}", trf("backup: {}", "yedek: {}", &[&path])));
+        }
+        match (report.verification, warning) {
+            (Verification::Skipped, _) => self.set_status(
                 Tone::Warn,
                 format!(
                     "{text} · {}",
@@ -359,6 +394,10 @@ impl App {
                     )
                 ),
             ),
+            (Verification::Passed, Some(warning)) => {
+                self.set_status(Tone::Warn, format!("{warning} · {text}"));
+            }
+            (Verification::Passed, None) => self.set_status(Tone::Ok, text),
         }
     }
 
@@ -387,7 +426,7 @@ impl App {
                 self.refresh(Some(&alias));
                 self.saved_status(
                     trf("Saved {}", "{} kaydedildi", &[&alias]),
-                    report.verification,
+                    &report,
                     warning,
                 );
             }

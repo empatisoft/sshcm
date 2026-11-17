@@ -669,3 +669,66 @@ fn ssh_rejecting_the_file_restores_it() {
     }
     assert_eq!(fs::read_to_string(home.config()).unwrap(), broken);
 }
+
+#[test]
+fn backups_are_listed_newest_first_across_files() {
+    let home = home_with_includes();
+    let mut store = home.store();
+    let mut vpn = store.find("legacy-vpn").unwrap().conn;
+    vpn.user = Some("first".to_string());
+    store.update("legacy-vpn", &vpn).unwrap();
+    store.save(&opts()).unwrap();
+    store.add(&conn("second", "s.example.com"));
+    store.save(&opts()).unwrap();
+
+    let backups = store.all_backups().unwrap();
+    assert_eq!(backups.len(), 2);
+    assert_eq!(backups[0].file, home.config());
+    assert_eq!(backups[1].file, home.path().join(".ssh/config.d/work"));
+}
+
+#[test]
+fn restoring_a_backup_goes_through_the_normal_write_path() {
+    let home = Home::new();
+    home.write_config(BASIC);
+    let mut store = home.store();
+    store.remove("dev").unwrap();
+    store.remove("staging").unwrap();
+    store.save(&opts()).unwrap();
+    let damaged = fs::read_to_string(home.config()).unwrap();
+    assert_ne!(damaged, BASIC);
+
+    let backup = store.all_backups().unwrap().remove(0);
+    assert_eq!(
+        store.content_of(&backup.file).as_deref(),
+        Some(damaged.as_str())
+    );
+    store.restore(&backup).unwrap();
+    assert!(store.is_modified());
+    // Nothing is on disk until save.
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), damaged);
+    let report = store.save(&opts()).unwrap();
+
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), BASIC);
+    // The state that was replaced is itself kept as a backup.
+    assert_eq!(fs::read_to_string(&report.backups[0]).unwrap(), damaged);
+    assert_eq!(store.all_backups().unwrap().len(), 2);
+}
+
+#[test]
+fn restoring_a_backup_of_an_included_file_touches_only_that_file() {
+    let home = home_with_includes();
+    let main_before = fs::read_to_string(home.config()).unwrap();
+    let mut store = home.store();
+    store.remove("legacy-vpn").unwrap();
+    store.save(&opts()).unwrap();
+
+    let backup = store.all_backups().unwrap().remove(0);
+    store.restore(&backup).unwrap();
+    store.save(&opts()).unwrap();
+    assert_eq!(
+        fs::read_to_string(home.path().join(".ssh/config.d/work")).unwrap(),
+        WORK
+    );
+    assert_eq!(fs::read_to_string(home.config()).unwrap(), main_before);
+}

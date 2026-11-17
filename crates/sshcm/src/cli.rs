@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use clap::{Args, Command, CommandFactory, Parser, Subcommand};
+use clap::{Arg, ArgAction, Args, Command, CommandFactory, Parser, Subcommand};
 use sshcm_core::model::{collapse_tilde, parse_port, parse_tags};
 use sshcm_core::{Connection, Proxy};
 
@@ -11,7 +11,13 @@ use crate::error::Result;
 use crate::i18n::tr;
 
 #[derive(Debug, Parser)]
-#[command(name = "sshcm", version, disable_help_subcommand = true)]
+#[command(
+    name = "sshcm",
+    version,
+    disable_help_subcommand = true,
+    disable_help_flag = true,
+    disable_version_flag = true
+)]
 pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -34,9 +40,13 @@ pub enum Cmd {
     List {
         #[arg(long, value_name = "TAG")]
         tag: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     Show {
         alias: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     Add {
         alias: Option<String>,
@@ -49,6 +59,10 @@ pub enum Cmd {
         rename: Option<String>,
         #[command(flatten)]
         fields: Fields,
+    },
+    Copy {
+        alias: Option<String>,
+        new_alias: Option<String>,
     },
     #[command(visible_alias = "remove")]
     Rm {
@@ -63,6 +77,16 @@ pub enum Cmd {
         #[command(subcommand)]
         action: Option<ConfigCmd>,
     },
+    Backups,
+    Restore {
+        backup: Option<String>,
+    },
+    Completions {
+        shell: clap_complete::Shell,
+    },
+    /// Prints the man page; used when packaging.
+    #[command(hide = true)]
+    Man,
 }
 
 #[derive(Debug, Subcommand)]
@@ -170,7 +194,23 @@ impl Fields {
 
 /// The clap command with help texts in the current language.
 pub fn command() -> Command {
-    Cli::command()
+    // clap's own help and version flags are replaced so that their
+    // descriptions follow the interface language too.
+    let help = Arg::new("help")
+        .short('h')
+        .long("help")
+        .global(true)
+        .action(ArgAction::Help)
+        .help(tr("Print help", "Yardımı göster"));
+    let version = Arg::new("version")
+        .short('V')
+        .long("version")
+        .action(ArgAction::Version)
+        .help(tr("Print version", "Sürümü göster"));
+
+    let command = Cli::command()
+        .arg(help)
+        .arg(version)
         .about(tr(
             "SSH Connection Manager: add, edit, remove and list the connections in ~/.ssh/config",
             "SSH Connection Manager: ~/.ssh/config içindeki bağlantıları ekler, düzenler, siler ve listeler",
@@ -197,9 +237,7 @@ pub fn command() -> Command {
                 "Onay sorma (betikler için)",
             ))
         })
-        .mut_arg("lang", |a| {
-            a.help(tr("Interface language", "Arayüz dili"))
-        })
+        .mut_arg("lang", |a| a.help(tr("Interface language", "Arayüz dili")))
         .mut_subcommand("list", |c| {
             c.about(tr("Show all connections", "Tüm bağlantıları göster"))
                 .mut_arg("tag", |a| {
@@ -208,6 +246,7 @@ pub fn command() -> Command {
                         "Yalnızca bu etiketi taşıyan bağlantıları göster",
                     ))
                 })
+                .mut_arg("json", json_help)
         })
         .mut_subcommand("show", |c| {
             c.about(tr(
@@ -215,15 +254,13 @@ pub fn command() -> Command {
                 "Tek bir bağlantının tüm ayarlarını göster",
             ))
             .mut_arg("alias", alias_help)
+            .mut_arg("json", json_help)
         })
         .mut_subcommand("add", |c| {
-            fields_help(c.about(tr("Create a new connection", "Yeni bağlantı oluştur")))
-                .mut_arg("alias", |a| {
-                    a.help(tr(
-                        "Name of the new connection",
-                        "Yeni bağlantının adı",
-                    ))
-                })
+            fields_help(c.about(tr("Create a new connection", "Yeni bağlantı oluştur"))).mut_arg(
+                "alias",
+                |a| a.help(tr("Name of the new connection", "Yeni bağlantının adı")),
+            )
         })
         .mut_subcommand("edit", |c| {
             fields_help(c.about(tr(
@@ -238,22 +275,34 @@ pub fn command() -> Command {
                 ))
             })
         })
+        .mut_subcommand("copy", |c| {
+            c.about(tr(
+                "Create a connection from an existing one",
+                "Mevcut bir bağlantıdan yeni bağlantı oluştur",
+            ))
+            .mut_arg("alias", |a| {
+                a.help(tr(
+                    "Connection to copy; picked from a list when left out",
+                    "Kopyalanacak bağlantı; verilmezse listeden seçilir",
+                ))
+            })
+            .mut_arg("new_alias", |a| {
+                a.help(tr("Alias of the copy", "Kopyanın alias'ı"))
+            })
+        })
         .mut_subcommand("rm", |c| {
             c.about(tr("Delete a connection", "Bir bağlantıyı sil"))
                 .mut_arg("alias", alias_help)
         })
         .mut_subcommand("connect", |c| {
-            c.about(tr(
-                "Open a connection with ssh",
-                "ssh ile bağlantı aç",
-            ))
-            .mut_arg("alias", alias_help)
-            .mut_arg("ssh_args", |a| {
-                a.help(tr(
-                    "Extra arguments passed to ssh",
-                    "ssh komutuna iletilecek ek argümanlar",
-                ))
-            })
+            c.about(tr("Open a connection with ssh", "ssh ile bağlantı aç"))
+                .mut_arg("alias", alias_help)
+                .mut_arg("ssh_args", |a| {
+                    a.help(tr(
+                        "Extra arguments passed to ssh",
+                        "ssh komutuna iletilecek ek argümanlar",
+                    ))
+                })
         })
         .mut_subcommand("config", |c| {
             c.about(tr(
@@ -261,8 +310,11 @@ pub fn command() -> Command {
                 "sshcm'in kendi ayarlarını göster veya değiştir",
             ))
             .mut_subcommand("get", |c| {
-                c.about(tr("Print the value of a setting", "Bir ayarın değerini yazdır"))
-                    .mut_arg("key", key_help)
+                c.about(tr(
+                    "Print the value of a setting",
+                    "Bir ayarın değerini yazdır",
+                ))
+                .mut_arg("key", key_help)
             })
             .mut_subcommand("set", |c| {
                 c.about(tr("Change a setting", "Bir ayarı değiştir"))
@@ -270,6 +322,72 @@ pub fn command() -> Command {
                     .mut_arg("value", |a| a.help(tr("New value", "Yeni değer")))
             })
         })
+        .mut_subcommand("backups", |c| {
+            c.about(tr(
+                "List the backups of the config",
+                "Config dosyasının yedeklerini listele",
+            ))
+        })
+        .mut_subcommand("restore", |c| {
+            c.about(tr(
+                "Put a backup back in place of the config",
+                "Bir yedeği config dosyasının yerine geri yükle",
+            ))
+            .mut_arg("backup", |a| {
+                a.help(tr(
+                    "Backup file name or path; picked from a list when left out",
+                    "Yedek dosyasının adı veya yolu; verilmezse listeden seçilir",
+                ))
+            })
+        })
+        .mut_subcommand("completions", |c| {
+            c.about(tr(
+                "Print a completion script for your shell",
+                "Kabuğunuz için tamamlama betiğini yazdır",
+            ))
+            .mut_arg("shell", |a| a.help(tr("Shell", "Kabuk")))
+        });
+    localize_headings(command)
+}
+
+/// Sets the headings of every help page ("Usage", "Commands", "Arguments",
+/// "Options") in the interface language.
+fn localize_headings(command: Command) -> Command {
+    let usage = tr("Usage:", "Kullanım:");
+    let template = format!(
+        "{{before-help}}{{about-with-newline}}\n{usage} {{usage}}\n\n{{all-args}}{{after-help}}"
+    );
+    let arguments = tr("Arguments", "Argümanlar");
+    let options = tr("Options", "Seçenekler");
+    let commands = tr("Commands", "Komutlar");
+
+    let subcommands: Vec<String> = command
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect();
+    let names: Vec<(String, bool)> = command
+        .get_arguments()
+        .map(|a| (a.get_id().to_string(), a.is_positional()))
+        .collect();
+
+    let mut command = command
+        .help_template(template)
+        .subcommand_help_heading(commands);
+    for (name, positional) in names {
+        let heading = if positional { arguments } else { options };
+        command = command.mut_arg(name, |a| a.help_heading(heading));
+    }
+    for name in subcommands {
+        command = command.mut_subcommand(name, localize_headings);
+    }
+    command
+}
+
+fn json_help(arg: clap::Arg) -> clap::Arg {
+    arg.help(tr(
+        "Print JSON instead of text, for scripts",
+        "Betikler için metin yerine JSON yazdır",
+    ))
 }
 
 fn alias_help(arg: clap::Arg) -> clap::Arg {

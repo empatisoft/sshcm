@@ -7,11 +7,12 @@ pub mod keys;
 use std::fmt;
 
 use inquire::ui::{Color, RenderConfig, Styled};
-use inquire::{Confirm, Select};
-use sshcm_core::Entry;
+use inquire::validator::Validation;
+use inquire::{Confirm, Select, Text};
+use sshcm_core::{Entry, ValidationError};
 
 use crate::error::Result;
-use crate::i18n::tr;
+use crate::i18n::{self, tr};
 use crate::style::pad;
 
 /// Sets the look of every prompt. inquire drops colors by itself when
@@ -89,6 +90,22 @@ pub fn select<T>(message: &str, choices: Vec<Choice<T>>, cursor: usize) -> Resul
 
 pub fn confirm(message: &str, default: bool) -> Result<bool> {
     Ok(Confirm::new(message).with_default(default).prompt()?)
+}
+
+/// Asks for one line of text that must pass `check`.
+pub fn ask_text(
+    message: &str,
+    check: impl Fn(&str) -> std::result::Result<(), ValidationError> + Clone + 'static,
+) -> Result<String> {
+    let answer = Text::new(message)
+        .with_validator(move |input: &str| {
+            Ok(match check(input.trim()) {
+                Ok(()) => Validation::Valid,
+                Err(err) => Validation::Invalid(i18n::validation(&err).into()),
+            })
+        })
+        .prompt()?;
+    Ok(answer.trim().to_string())
 }
 
 /// Lets the user pick one connection from a searchable list.

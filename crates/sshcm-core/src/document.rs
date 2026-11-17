@@ -429,6 +429,10 @@ pub fn render_block(conn: &Connection, indent: &str, eol: &str) -> Vec<Line> {
     if let Some((key, value)) = conn.proxy.directive() {
         push(key, &value);
     }
+    // Settings sshcm does not manage; present when a block is copied.
+    for (key, value) in &conn.other {
+        push(key, value);
+    }
     lines
 }
 
@@ -765,6 +769,22 @@ Match host";
             doc.render(),
             "Host a\r\n    HostName h\r\n\r\nHost b\r\n    HostName h2\r\n"
         );
+    }
+
+    #[test]
+    fn add_writes_other_settings_of_a_copied_connection() {
+        let source = Document::parse(
+            "Host a\n    HostName h\n    IdentityFile ~/.ssh/one\n    IdentityFile ~/.ssh/two\n    ServerAliveInterval 60\n",
+        );
+        let mut copy = entry(&source, "a").conn;
+        copy.alias = "b".to_string();
+        let mut doc = Document::parse("");
+        doc.add(&copy);
+        assert_eq!(
+            doc.render(),
+            "Host b\n    HostName h\n    IdentityFile ~/.ssh/one\n    IdentityFile ~/.ssh/two\n    ServerAliveInterval 60\n"
+        );
+        assert_eq!(entry(&doc, "b").conn, copy);
     }
 
     #[test]

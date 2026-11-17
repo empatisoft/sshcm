@@ -12,4 +12,4 @@ pub mod store;
 pub use diff::{Change, diff_lines};
 pub use document::{DocError, Document, Entry, dependents, render_block_text};
 pub use model::{Connection, DEFAULT_PORT, Known, Proxy, ValidationError};
-pub use store::{Error, SaveOptions, SaveReport, Store, Verification};
+pub use store::{Backup, Error, SaveOptions, SaveReport, Store, Verification};

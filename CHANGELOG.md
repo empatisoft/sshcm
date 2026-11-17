@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sshcm backups` lists the backups and `sshcm restore [backup]` puts one
+  back after showing the difference. A restore is an ordinary write: the
+  content it replaces is backed up and the result is checked with ssh.
+- `sshcm copy [alias] [new alias]`, and `c` in the full-screen interface,
+  create a connection from an existing one, including the settings sshcm has
+  no field for.
+- `--json` for `list` and `show`.
+- `sshcm completions <shell>` prints a completion script.
+- sshcm now checks which `nc` is installed: a netcat without `-X` (GNU
+  netcat, ncat, BusyBox) cannot run the SOCKS5/HTTP proxy command, and saving
+  such a proxy warns about it.
+- The details panel and the form preview scroll with PgUp and PgDn.
+- The interface shows the backup path after saving and removing.
+- Help headings ("Usage", "Options", ...) follow the interface language.
+
 ## [0.3.1] - 2026-11-17
 
 ### Fixed

@@ -37,7 +37,25 @@ pub fn set(lang: Lang) {
     LANG.store(lang as u8, Ordering::Relaxed);
 }
 
+thread_local! {
+    /// A language for the current thread only. Tests use it: the global
+    /// setting is shared by every test running in parallel.
+    static OVERRIDE: std::cell::Cell<Option<Lang>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with `lang` as the language of this thread.
+#[cfg(test)]
+pub fn with_lang<T>(lang: Lang, f: impl FnOnce() -> T) -> T {
+    let previous = OVERRIDE.with(|o| o.replace(Some(lang)));
+    let result = f();
+    OVERRIDE.with(|o| o.set(previous));
+    result
+}
+
 pub fn current() -> Lang {
+    if let Some(lang) = OVERRIDE.with(|o| o.get()) {
+        return lang;
+    }
     if LANG.load(Ordering::Relaxed) == Lang::Tr as u8 {
         Lang::Tr
     } else {
