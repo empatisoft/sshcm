@@ -30,6 +30,15 @@ cargo run -p sshcm-core --example roundtrip -- ~/.ssh/config
   Keep it thin. Interactive prompts are not tested, so logic belongs in the
   core where it is.
 
+The full-screen interface (`crates/sshcm/src/tui`) keeps state and drawing
+apart: `app`, `form` and `picker` react to keys, `ui` draws. Tests press keys
+on the state and draw into an in-memory terminal. To look at every screen as
+text:
+
+```sh
+cargo test -p sshcm dump -- --ignored --nocapture
+```
+
 ## Rules that matter
 
 - sshcm must never change a byte of the config file outside the block it is

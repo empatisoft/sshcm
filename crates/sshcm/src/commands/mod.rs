@@ -5,7 +5,6 @@ pub mod config;
 pub mod connect;
 pub mod edit;
 pub mod list;
-pub mod menu;
 pub mod rm;
 pub mod show;
 

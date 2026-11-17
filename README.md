@@ -59,12 +59,13 @@ cargo install sshcm
 
 ## Usage
 
-Run `sshcm` without arguments to open the menu, or use a subcommand directly.
-When you leave out the alias, you pick the connection from a searchable list.
+Run `sshcm` without arguments to open the full-screen interface, or use a
+subcommand directly. When you leave out the alias of a subcommand, you pick
+the connection from a searchable list.
 
 | Command | What it does |
 | --- | --- |
-| `sshcm` | Menu: Connect, Add, Edit, Remove, List, Quit |
+| `sshcm` | Full-screen interface |
 | `sshcm list [--tag <tag>]` | Print the connections as a table |
 | `sshcm show [alias]` | Show every setting of one connection |
 | `sshcm add [alias]` | Create a connection |
@@ -79,6 +80,52 @@ Global flags:
 - `--dry-run` shows what would change and writes nothing.
 - `--yes` skips confirmations, for scripts.
 - `--lang <en|tr>` sets the interface language for one run.
+
+### Full-screen interface
+
+```text
+sshcm  4 connections                                                                             ~/.ssh/config
+┌ Connections ──────────────────────────────────┐┌ web-prod ─────────────────────────────────────────────────┐
+│/ Search by alias, host or user                ││Alias             web-prod                                 │
+│  bastion   ops@bastion.example.com            ││HostName          10.0.2.10                                │
+│  db-prod   postgres@10.0.2.15      via bastion││User              deploy                                   │
+│❯ web-prod  deploy@10.0.2.10        via bastion││Port              22 (default)                             │
+│  staging   ubuntu@203.0.113.24:2222           ││Identity file     none                                     │
+│  Read-only                                    ││Proxy             Jump host → bastion                      │
+│  *         pattern                            ││Tags              prod, web                                │
+│                                               ││Other settings    ServerAliveInterval 60                   │
+│                                               ││                                                           │
+│                                               ││Config block                                               │
+│                                               ││  # sshcm:tags prod, web                                   │
+│                                               ││  Host web-prod                                            │
+│                                               ││      HostName 10.0.2.10                                   │
+│                                               ││      User deploy                                          │
+│                                               ││      ProxyJump bastion                                    │
+│                                               ││      ServerAliveInterval 60                               │
+│                                               ││                                                           │
+└───────────────────────────────────────────────┘└───────────────────────────────────────────────────────────┘
+                                              enter connect  a add  e edit  d delete  / search  ? help  q quit
+```
+
+| Key | What it does |
+| --- | --- |
+| `↑` `↓` or `j` `k` | Move through the list |
+| `/` | Search by alias, address, user and tags (fuzzy) |
+| `Enter` | Connect to the selected connection |
+| `a` | Add a connection |
+| `e` | Edit the selected connection |
+| `d` | Remove the selected connection; "Cancel" is selected by default |
+| `Tab` / `Shift+Tab` | Next / previous field in the form |
+| `Enter` on Proxy or Identity file | Open the picker for that field |
+| `Ctrl+S` | Save the form |
+| `Esc` | Close the form or dialog |
+| `?` | Help |
+| `q` | Quit |
+
+The form checks every field as you type and shows the block, or the diff of
+the block, that will be written. In the proxy picker, `Tab` switches between
+the proxy types and `Space` selects jump hosts; selecting several chains them
+in that order. Below 80 columns only the list is shown.
 
 ### Scripts
 
@@ -187,7 +234,6 @@ settings file. Command names and flags are the same in every language.
 
 ## Roadmap
 
-- v0.5: full-screen terminal interface
 - v1.0: stable command line
 
 ## License

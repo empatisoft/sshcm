@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-17
+
+### Added
+
+- Full-screen interface when `sshcm` runs without a subcommand: a searchable
+  list with the details and config block of the selected connection, a form
+  with validation as you type and a live preview, a proxy picker with
+  ordered jump hosts, a remove dialog that defaults to Cancel, and a help
+  screen.
+- Fuzzy search over alias, address, user and tags.
+
+### Changed
+
+- The interface replaces the question-based main menu. The subcommands and
+  their prompts are unchanged.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added

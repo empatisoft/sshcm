@@ -11,6 +11,7 @@ mod i18n;
 mod prompt;
 mod settings;
 mod style;
+mod tui;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -66,7 +67,7 @@ fn run() -> Result<()> {
     prompt::init();
 
     match cli.command {
-        None => commands::menu::run(&ctx),
+        None => tui::run(&ctx),
         Some(Cmd::List { tag }) => commands::list::run(&ctx, tag.as_deref()),
         Some(Cmd::Show { alias }) => commands::show::run(&ctx, alias),
         Some(Cmd::Add { alias, fields }) => commands::add::run(&ctx, alias, &fields),

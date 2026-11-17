@@ -176,8 +176,8 @@ pub fn command() -> Command {
             "SSH Connection Manager: ~/.ssh/config içindeki bağlantıları ekler, düzenler, siler ve listeler",
         ))
         .after_help(tr(
-            "Run sshcm without a command to open the menu.",
-            "Menüyü açmak için sshcm komutunu argümansız çalıştırın.",
+            "Run sshcm without a command to open the full-screen interface.",
+            "Tam ekran arayüzü açmak için sshcm komutunu argümansız çalıştırın.",
         ))
         .mut_arg("config", |a| {
             a.help(tr(
