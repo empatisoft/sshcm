@@ -22,6 +22,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.4.0] - 2026-11-17
 
+Tagged but never published: the release workflow failed while creating the
+GitHub Release. Everything below shipped in 0.5.0.
+
 ### Added
 
 - `sshcm backups` lists the backups and `sshcm restore [backup]` puts one
