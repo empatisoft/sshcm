@@ -25,4 +25,7 @@ All notable changes to this project are documented here. The format follows
   as flags for scripts.
 - `sshcm config` with the `language` (English, Turkish) and `backup_keep`
   settings.
+- Release pipeline with dist: prebuilt binaries for macOS and Linux (static
+  musl builds), a shell installer and a Homebrew formula, built when a
+  version tag is pushed.
 - CI on macOS and Linux: `cargo fmt --check`, `cargo clippy`, `cargo test`.

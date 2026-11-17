@@ -1,5 +1,4 @@
-//! Core library of sshcm: a lossless `ssh_config` parser and the safe
-//! read/modify/write operations built on top of it.
+#![doc = include_str!("../README.md")]
 //!
 //! This crate is the only code that reads or writes the config file. The
 //! command line in the `sshcm` crate collects input and shows results.
