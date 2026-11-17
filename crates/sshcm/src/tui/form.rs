@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use sshcm_core::model::{
-    collapse_tilde, expand_tilde, parse_port, parse_tags, validate, validate_alias,
+    collapse_tilde, expand_tilde, parse_port, parse_tags, validate, validate_alias, validate_group,
     validate_hostname, validate_user,
 };
 use sshcm_core::{
@@ -28,10 +28,11 @@ pub enum Field {
     Proxy,
     Description,
     Tags,
+    Group,
 }
 
 impl Field {
-    pub const ALL: [Field; 8] = [
+    pub const ALL: [Field; 9] = [
         Field::Alias,
         Field::HostName,
         Field::User,
@@ -40,6 +41,7 @@ impl Field {
         Field::Proxy,
         Field::Description,
         Field::Tags,
+        Field::Group,
     ];
 
     pub fn label(self) -> &'static str {
@@ -52,6 +54,7 @@ impl Field {
             Field::Proxy => "Proxy",
             Field::Description => tr("Description", "Açıklama"),
             Field::Tags => tr("Tags", "Etiketler"),
+            Field::Group => tr("Group", "Grup"),
         }
     }
 
@@ -101,6 +104,8 @@ pub struct Form {
     pub proxy: Proxy,
     pub description: TextInput,
     pub tags: TextInput,
+    /// The workspace the connection belongs to; empty for none.
+    pub group: TextInput,
     pub focus: Field,
     /// Set by the first save attempt; from then on empty required fields are
     /// reported too.
@@ -154,6 +159,7 @@ impl Form {
             proxy: conn.proxy.clone(),
             description: TextInput::new(conn.description.as_deref().unwrap_or("")),
             tags: TextInput::new(&conn.tags.join(", ")),
+            group: TextInput::new(conn.group.as_deref().unwrap_or("")),
             focus: Field::Alias,
             attempted: false,
             message: None,
@@ -184,6 +190,7 @@ impl Form {
             Field::Proxy => None,
             Field::Description => Some(&self.description),
             Field::Tags => Some(&self.tags),
+            Field::Group => Some(&self.group),
         }
     }
 
@@ -197,6 +204,7 @@ impl Form {
             Field::Proxy => None,
             Field::Description => Some(&mut self.description),
             Field::Tags => Some(&mut self.tags),
+            Field::Group => Some(&mut self.group),
         }
     }
 
@@ -227,6 +235,7 @@ impl Form {
         if let Ok(tags) = parse_tags(self.tags.text()) {
             conn.tags = tags;
         }
+        conn.group = optional(&self.group);
         conn
     }
 
@@ -293,6 +302,13 @@ impl Form {
             && let Err(err) = parse_tags(self.tags.text())
         {
             errors.push((Field::Tags, err));
+        }
+
+        if !self.group.is_empty()
+            && check(Field::Group)
+            && let Err(err) = validate_group(self.group.text())
+        {
+            errors.push((Field::Group, err));
         }
 
         // With the single fields in order, let the core check the whole
@@ -379,9 +395,22 @@ impl Form {
         match self.focus {
             Field::IdentityFile if !self.keys.is_empty() => {
                 self.overlay = Some(Overlay::Keys(KeyPicker::new(
+                    tr("Identity file", "Anahtar dosyası"),
                     &self.keys,
                     self.identity_file.text(),
                 )));
+            }
+            Field::Group => {
+                // Offer the groups already in use; a new one is typed.
+                let groups: Vec<String> =
+                    store.groups().into_iter().map(|(name, _)| name).collect();
+                if !groups.is_empty() {
+                    self.overlay = Some(Overlay::Keys(KeyPicker::new(
+                        tr("Group", "Grup"),
+                        &groups,
+                        self.group.text(),
+                    )));
+                }
             }
             Field::Proxy => {
                 let mut me: Vec<String> = Vec::new();
@@ -416,7 +445,13 @@ impl Form {
             Some(Overlay::Keys(picker)) => {
                 match picker.on_key(key) {
                     Some(Ok(choice)) => {
-                        self.identity_file.set(choice.as_deref().unwrap_or(""));
+                        // The list belongs to the field it was opened from.
+                        let value = choice.as_deref().unwrap_or("");
+                        if self.focus == Field::Group {
+                            self.group.set(value);
+                        } else {
+                            self.identity_file.set(value);
+                        }
                         self.overlay = None;
                     }
                     Some(Err(())) => self.overlay = None,
@@ -470,8 +505,17 @@ impl Form {
             }
             KeyCode::Tab | KeyCode::Down => self.focus = self.focus.step(true),
             KeyCode::BackTab | KeyCode::Up => self.focus = self.focus.step(false),
-            KeyCode::Enter if matches!(self.focus, Field::Proxy | Field::IdentityFile) => {
+            KeyCode::Enter
+                if matches!(
+                    self.focus,
+                    Field::Proxy | Field::IdentityFile | Field::Group
+                ) =>
+            {
                 self.open_overlay(store);
+                // Nothing to pick from (no keys, no groups yet): move on.
+                if self.overlay.is_none() {
+                    self.focus = self.focus.step(true);
+                }
             }
             KeyCode::Char(' ') if self.focus == Field::Proxy => self.open_overlay(store),
             // Enter moves on, like Tab, so the form can be filled top to bottom.

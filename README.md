@@ -66,7 +66,8 @@ the connection from a searchable list.
 | Command | What it does |
 | --- | --- |
 | `sshcm` | Full-screen interface |
-| `sshcm list [--tag <tag>] [--json]` | Print the connections as a table, or as JSON |
+| `sshcm list [--group <group>] [--tag <tag>] [--json]` | Print the connections as a table, or as JSON |
+| `sshcm groups` | List the groups and how many connections each has |
 | `sshcm show [alias] [--json]` | Show every setting of one connection |
 | `sshcm add [alias]` | Create a connection |
 | `sshcm edit [alias]` | Change a connection; shows a diff before saving |
@@ -114,7 +115,8 @@ sshcm  4 connections                                                            
 | Key | What it does |
 | --- | --- |
 | `↑` `↓` or `j` `k` | Move through the list |
-| `/` | Search by alias, address, user and tags (fuzzy) |
+| `/` | Search by alias, address, user, tags and group (fuzzy) |
+| `Tab` / `Shift+Tab` in the list | Show one group at a time |
 | `Enter` | Connect to the selected connection |
 | `a` | Add a connection |
 | `e` | Edit the selected connection |
@@ -149,7 +151,7 @@ sshcm rm web-prod --yes
 ```
 
 Flags for `add` and `edit`: `--hostname`, `--user`, `--port`,
-`--identity-file`, `--desc`, `--tags`, and one of `--jump`, `--socks5`,
+`--identity-file`, `--group`, `--desc`, `--tags`, and one of `--jump`, `--socks5`,
 `--http-proxy`, `--proxy-command`, `--no-proxy`.
 
 `list --json` and `show --json` print the connections for other programs.
@@ -187,18 +189,46 @@ connection that others jump through. SOCKS5 and HTTP proxies need the OpenBSD
 ncat, BusyBox) have no `-X` option; sshcm checks which one you have and warns
 before saving such a proxy.
 
-## Description and tags
+## Groups, description and tags
 
-A connection can carry a one-line description and tags. ssh has no setting for
-these, so they are stored as comments above the `Host` line, which ssh
-ignores:
+Connections can be grouped by workspace: `personal`, `a-company`,
+`b-company`. A connection belongs to at most one group.
+
+```console
+$ sshcm add web --hostname 10.0.2.10 --group a-company
+$ sshcm edit laptop --group personal      # move; --group "" takes it out
+$ sshcm list
+ALIAS    HOSTNAME       USER  PORT  PROXY
+personal
+laptop   192.168.1.10         22
+nas      nas.local            22
+
+a-company
+web      10.0.2.10            22
+
+(no group)
+scratch  203.0.113.9          22
+```
+
+`sshcm list --group a-company` shows one group and `sshcm groups` counts
+them. The full-screen interface lists connections under their group; `Tab`
+steps through the groups one at a time, and the form has a Group field that
+offers the groups already in use.
+
+A connection can also carry a one-line description and tags, for labels that
+cut across groups (`prod`, `db`). ssh has no setting for any of these, so
+they are stored as comments above the `Host` line, which ssh ignores:
 
 ```
+# sshcm:group a-company
 # sshcm:desc Production web server
 # sshcm:tags prod, web
 Host web-prod
     HostName 10.0.2.10
 ```
+
+Groups are names, not files: every connection stays in the config file it is
+in, and you can rename a group by editing its connections.
 
 ## How sshcm treats your config
 

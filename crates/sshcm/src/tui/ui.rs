@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use sshcm_core::model::{DEFAULT_PORT, collapse_tilde, parse_port};
 use sshcm_core::{Change, Entry, Proxy};
 
-use super::app::{App, DeleteDialog, Screen, Tone};
+use super::app::{App, DeleteDialog, GroupFilter, Screen, Tone};
 use super::form::{Field, Form, Overlay};
 use super::input::TextInput;
 use super::picker::{KeyPicker, Kind, ProxyPicker};
@@ -141,6 +141,11 @@ fn draw_scrolled(
             mark,
         );
     }
+}
+
+/// The name shown for connections that belong to no group.
+fn no_group() -> &'static str {
+    tr("(no group)", "(grupsuz)")
 }
 
 /// A rectangle of at most the given size in the middle of `area`.
@@ -346,22 +351,20 @@ fn draw_main_footer(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
             theme,
         );
     } else {
-        draw_footer(
-            frame,
-            area,
-            left,
-            &[
-                ("enter", tr("connect", "bağlan")),
-                ("a", tr("add", "ekle")),
-                ("e", tr("edit", "düzenle")),
-                ("d", tr("delete", "sil")),
-                ("c", tr("copy", "kopyala")),
-                ("/", tr("search", "ara")),
-                ("?", tr("help", "yardım")),
-                ("q", tr("quit", "çık")),
-            ],
-            theme,
-        );
+        let mut hints: Vec<(&str, &str)> = vec![
+            ("enter", tr("connect", "bağlan")),
+            ("a", tr("add", "ekle")),
+            ("e", tr("edit", "düzenle")),
+            ("d", tr("delete", "sil")),
+            ("c", tr("copy", "kopyala")),
+            ("/", tr("search", "ara")),
+        ];
+        if app.has_groups() {
+            hints.push(("tab", tr("group", "grup")));
+        }
+        hints.push(("?", tr("help", "yardım")));
+        hints.push(("q", tr("quit", "çık")));
+        draw_footer(frame, area, left, &hints, theme);
     }
 }
 
@@ -459,7 +462,10 @@ fn draw_form_footer(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme
                     Span::styled(text, theme.error()),
                 ])
             };
-            let pick = matches!(form.focus, Field::Proxy | Field::IdentityFile);
+            let pick = matches!(
+                form.focus,
+                Field::Proxy | Field::IdentityFile | Field::Group
+            );
             let mut hints: Vec<(&str, &str)> = Vec::new();
             hints.push(("ctrl+s", tr("save", "kaydet")));
             hints.push(("esc", tr("cancel", "vazgeç")));
@@ -491,7 +497,15 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     let block = Block::bordered()
         .border_style(theme.accent())
         .title(Span::styled(
-            format!(" {} ", tr("Connections", "Bağlantılar")),
+            match &app.group_filter {
+                GroupFilter::All => format!(" {} ", tr("Connections", "Bağlantılar")),
+                GroupFilter::Group(name) => {
+                    format!(" {} · {name} ", tr("Connections", "Bağlantılar"))
+                }
+                GroupFilter::Ungrouped => {
+                    format!(" {} · {} ", tr("Connections", "Bağlantılar"), no_group())
+                }
+            },
             theme.strong(),
         ));
     let inner = block.inner(area);
@@ -535,8 +549,24 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_line = 0;
     let mut heading_done = false;
+    // Group headings only make sense in the plain, unfiltered list: a search
+    // ranks by match, and a group view already names its group in the title.
+    let show_groups =
+        app.has_groups() && app.group_filter == GroupFilter::All && app.search.value().is_empty();
+    let mut current_group: Option<Option<&str>> = None;
     for (position, &index) in app.visible.iter().enumerate() {
         let entry = &app.entries[index];
+        let group = entry.conn.group.as_deref();
+        if show_groups && !entry.is_pattern && current_group != Some(group) {
+            current_group = Some(group);
+            lines.push(Line::styled(
+                format!(
+                    "  {}",
+                    fit(group.unwrap_or(no_group()), inner_width.saturating_sub(2))
+                ),
+                theme.dim().patch(theme.strong()),
+            ));
+        }
         if entry.is_pattern && !heading_done {
             heading_done = true;
             lines.push(Line::styled(
@@ -666,6 +696,9 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
         ),
         ("Proxy".into(), proxy_long(&conn.proxy)),
     ];
+    if let Some(group) = &conn.group {
+        rows.push((tr("Group", "Grup").into(), group.clone()));
+    }
     if let Some(description) = &conn.description {
         rows.push((tr("Description", "Açıklama").into(), description.clone()));
     }
@@ -1109,7 +1142,7 @@ fn draw_key_picker(frame: &mut Frame, area: Rect, picker: &KeyPicker, theme: The
         area,
         56,
         picker.options.len() as u16 + 2,
-        tr("Identity file", "Anahtar dosyası").to_string(),
+        picker.title.clone(),
         theme.accent(),
         theme,
     );
@@ -1290,6 +1323,10 @@ fn draw_help(frame: &mut Frame, area: Rect, theme: Theme) {
                     tr("Move through connections", "Bağlantılar arasında gezin"),
                 ),
                 ("/", tr("Search", "Ara")),
+                (
+                    "tab",
+                    tr("Show one group at a time", "Grupları tek tek göster"),
+                ),
                 ("enter", tr("Connect with ssh", "ssh ile bağlan")),
                 ("a", tr("Add a connection", "Bağlantı ekle")),
                 (

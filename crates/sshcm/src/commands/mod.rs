@@ -70,6 +70,27 @@ pub fn location(store: &Store, entry: &Entry) -> String {
     }
 }
 
+/// Orders connections by group: groups in the order they first appear, then
+/// the connections without a group. The order inside a group is kept.
+pub fn by_group<T>(items: Vec<T>, group_of: impl Fn(&T) -> Option<&str>) -> Vec<T> {
+    let mut order: Vec<String> = Vec::new();
+    for item in &items {
+        if let Some(group) = group_of(item)
+            && !order.iter().any(|g| g == group)
+        {
+            order.push(group.to_string());
+        }
+    }
+    let rank = |item: &T| match group_of(item) {
+        Some(group) => order.iter().position(|g| g == group).unwrap_or(order.len()),
+        None => order.len(),
+    };
+    let mut ranked: Vec<(usize, T)> = items.into_iter().map(|i| (rank(&i), i)).collect();
+    // Stable: equal ranks keep their file order.
+    ranked.sort_by_key(|(rank, _)| *rank);
+    ranked.into_iter().map(|(_, item)| item).collect()
+}
+
 /// Finds the connection to work on: by name when given, otherwise from a
 /// list. Patterns are never offered.
 pub fn pick(store: &Store, alias: Option<String>, editable: bool, message: &str) -> Result<Entry> {
@@ -230,6 +251,7 @@ pub fn entry_json(store: &Store, entry: &Entry) -> serde_json::Value {
         "identity_file": conn.identity_file,
         "proxy_jump": jump,
         "proxy_command": command,
+        "group": conn.group,
         "description": conn.description,
         "tags": conn.tags,
         "other": other,

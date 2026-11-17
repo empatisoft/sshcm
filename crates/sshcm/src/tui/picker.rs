@@ -282,22 +282,28 @@ impl ProxyPicker {
     }
 }
 
-/// The list of key files found in `~/.ssh`; the first row is "None".
+/// A short list to pick one value from: the key files found in `~/.ssh`, or
+/// the groups in use. The first row is "None".
 #[derive(Debug, Clone)]
 pub struct KeyPicker {
+    pub title: String,
     pub options: Vec<Option<String>>,
     pub cursor: usize,
 }
 
 impl KeyPicker {
-    pub fn new(keys: &[String], current: &str) -> KeyPicker {
+    pub fn new(title: &str, keys: &[String], current: &str) -> KeyPicker {
         let mut options: Vec<Option<String>> = vec![None];
         options.extend(keys.iter().cloned().map(Some));
         let cursor = options
             .iter()
             .position(|o| o.as_deref() == Some(current))
             .unwrap_or(0);
-        KeyPicker { options, cursor }
+        KeyPicker {
+            title: title.to_string(),
+            options,
+            cursor,
+        }
     }
 
     /// `Some(choice)` once the user picked a row; the inner `None` is the

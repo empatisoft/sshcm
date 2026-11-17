@@ -30,6 +30,7 @@ pub fn run(ctx: &Ctx, alias: Option<String>, fields: &Fields) -> Result<()> {
             proxy: fields.has_proxy(),
             description: fields.desc.is_some(),
             tags: fields.tags.is_some(),
+            group: fields.group.is_some(),
         }
     };
     preset.alias = alias.unwrap_or_default();

@@ -937,3 +937,108 @@ fn the_real_openbsd_netcat_is_recognised() {
     assert!(!run.stdout.contains("-X option"), "{}", run.stdout);
     assert!(!run.stdout.contains("not found"), "{}", run.stdout);
 }
+
+// ---------------------------------------------------------------- groups --
+
+#[test]
+fn connections_are_grouped_by_workspace() {
+    let sb = Sandbox::new();
+    assert!(sb.run(&["groups"]).stdout.starts_with("No groups yet."));
+    for (alias, host, group) in [
+        ("laptop", "192.168.1.10", Some("personal")),
+        ("web", "10.0.2.10", Some("a-company")),
+        ("scratch", "203.0.113.9", None),
+        ("nas", "nas.local", Some("personal")),
+        ("api", "api.b.example", Some("b-company")),
+    ] {
+        let mut args = vec!["add", alias, "--hostname", host, "--yes"];
+        if let Some(group) = group {
+            args.extend(["--group", group]);
+        }
+        let run = sb.run(&args);
+        assert_eq!(run.code, 0, "{}", run.stderr);
+    }
+    assert!(
+        sb.config()
+            .starts_with("# sshcm:group personal\nHost laptop\n    HostName 192.168.1.10\n")
+    );
+
+    // Groups in the order they first appear; ungrouped connections last.
+    assert_eq!(
+        sb.run(&["list"]).stdout,
+        "ALIAS    HOSTNAME       USER  PORT  PROXY\n\
+         personal\n\
+         laptop   192.168.1.10         22\n\
+         nas      nas.local            22\n\
+         \n\
+         a-company\n\
+         web      10.0.2.10            22\n\
+         \n\
+         b-company\n\
+         api      api.b.example        22\n\
+         \n\
+         (no group)\n\
+         scratch  203.0.113.9          22\n"
+    );
+    assert_eq!(
+        sb.run(&["groups"]).stdout,
+        "GROUP       CONNECTIONS\n\
+         personal    2\n\
+         a-company   1\n\
+         b-company   1\n\
+         (no group)  1\n"
+    );
+    assert_eq!(
+        sb.run(&["list", "--group", "personal"]).stdout,
+        "ALIAS   HOSTNAME      USER  PORT  PROXY\n\
+         laptop  192.168.1.10        22\n\
+         nas     nas.local           22\n"
+    );
+    assert!(
+        sb.run(&["list", "--group", "nope"])
+            .stdout
+            .starts_with("No connections in the group nope.")
+    );
+    assert!(
+        sb.run(&["show", "web"])
+            .stdout
+            .contains("Group          a-company\n")
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&sb.run(&["list", "--json", "--group", "a-company"]).stdout).unwrap();
+    assert_eq!(json[0]["alias"], "web");
+    assert_eq!(json[0]["group"], "a-company");
+    let json: serde_json::Value =
+        serde_json::from_str(&sb.run(&["show", "scratch", "--json"]).stdout).unwrap();
+    assert_eq!(json["group"], serde_json::Value::Null);
+
+    // Move a connection to another group, then out of every group.
+    let before = sb.config();
+    let run = sb.run(&["edit", "scratch", "--group", "workspace", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("  + # sshcm:group workspace"),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        sb.config(),
+        before.replace("Host scratch\n", "# sshcm:group workspace\nHost scratch\n")
+    );
+    let run = sb.run(&["edit", "scratch", "--group", "", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(sb.config(), before);
+
+    // A copy stays in the group of its source.
+    assert_eq!(sb.run(&["copy", "web", "web2", "--yes"]).code, 0);
+    assert!(sb.config().contains("# sshcm:group a-company\nHost web2\n"));
+
+    let run = sb.run(&["edit", "web", "--group", "two words", "--yes"]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains("Group 'two words' is not valid."),
+        "{}",
+        run.stderr
+    );
+}

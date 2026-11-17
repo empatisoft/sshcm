@@ -111,6 +111,9 @@ pub fn validation(err: &ValidationError) -> String {
         TagInvalid(t) => {
             format!("'{t}' geçerli bir etiket değil. Harf, rakam ve '-' kullanın.")
         }
+        GroupInvalid(g) => {
+            format!("'{g}' geçerli bir grup adı değil. Harf, rakam, '-', '_' ve '.' kullanın.")
+        }
         DescriptionMultiline => "Açıklama tek satır olmalıdır.".to_string(),
     }
 }

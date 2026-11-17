@@ -68,7 +68,10 @@ fn run() -> Result<()> {
 
     match cli.command {
         None => tui::run(&ctx),
-        Some(Cmd::List { tag, json }) => commands::list::run(&ctx, tag.as_deref(), json),
+        Some(Cmd::List { tag, group, json }) => {
+            commands::list::run(&ctx, tag.as_deref(), group.as_deref(), json)
+        }
+        Some(Cmd::Groups) => commands::list::groups(&ctx),
         Some(Cmd::Show { alias, json }) => commands::show::run(&ctx, alias, json),
         Some(Cmd::Add { alias, fields }) => commands::add::run(&ctx, alias, &fields),
         Some(Cmd::Edit {

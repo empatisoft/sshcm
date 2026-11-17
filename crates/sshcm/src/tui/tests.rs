@@ -1122,3 +1122,262 @@ fn every_screen_is_drawn_in_turkish() {
             .contains("4 connections")
     );
 }
+
+// ---------------------------------------------------------------- groups --
+
+const GROUPED: &str = "\
+# sshcm:group personal
+Host laptop
+    HostName 192.168.1.10
+
+# sshcm:group a-company
+Host web
+    HostName 10.0.2.10
+    User deploy
+
+Host scratch
+    HostName 203.0.113.9
+
+# sshcm:group personal
+Host nas
+    HostName nas.local
+
+# sshcm:group b-company
+Host api
+    HostName api.b.example
+
+# sshcm:group a-company
+Host db
+    HostName 10.0.2.15
+
+Host *
+    AddKeysToAgent yes
+";
+
+fn visible_names(f: &Fixture) -> Vec<String> {
+    f.app
+        .visible
+        .iter()
+        .map(|&i| f.app.entries[i].alias().to_string())
+        .collect()
+}
+
+#[test]
+#[ignore = "prints the grouped list for a visual check"]
+fn dump_grouped() {
+    let mut f = Fixture::new(GROUPED);
+    println!("{}", f.screen(100, 22));
+    f.press(KeyCode::Tab);
+    f.press(KeyCode::Tab);
+    println!("{}", f.screen(100, 14));
+    f.press(KeyCode::Char('e'));
+    for _ in 0..8 {
+        f.press(KeyCode::Tab);
+    }
+    f.press(KeyCode::Enter);
+    println!("{}", f.screen(100, 18));
+}
+
+#[test]
+fn connections_are_listed_under_their_group() {
+    let f = Fixture::new(GROUPED);
+    // Groups in the order they first appear, ungrouped next, patterns last.
+    assert_eq!(
+        visible_names(&f),
+        ["laptop", "nas", "web", "db", "api", "scratch", "*"]
+    );
+    let screen = f.screen(100, 22);
+    let order: Vec<usize> = [
+        "  personal",
+        "❯ laptop",
+        "  nas ",
+        "  a-company",
+        "  web ",
+        "  db ",
+        "  b-company",
+        "  api ",
+        "  (no group)",
+        "  scratch",
+        "  Read-only",
+    ]
+    .iter()
+    .map(|text| {
+        screen
+            .find(text)
+            .unwrap_or_else(|| panic!("{text} missing in\n{screen}"))
+    })
+    .collect();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{screen}");
+    assert!(screen.contains("Group             personal"), "{screen}");
+    assert!(screen.contains("tab group"), "{screen}");
+    // Headings are not rows: moving down goes from connection to connection.
+    let mut f = f;
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Down);
+    assert_eq!(f.selected(), "web");
+}
+
+#[test]
+fn a_config_without_groups_shows_no_group_headings() {
+    let f = Fixture::new(CONFIG);
+    let screen = f.screen(110, 24);
+    assert!(!screen.contains("(no group)"), "{screen}");
+    assert!(!screen.contains("tab group"), "{screen}");
+    let mut f = f;
+    f.press(KeyCode::Tab);
+    assert_eq!(f.app.visible.len(), 5);
+}
+
+#[test]
+fn tab_shows_one_group_at_a_time() {
+    let mut f = Fixture::new(GROUPED);
+    f.press(KeyCode::Tab);
+    assert_eq!(visible_names(&f), ["laptop", "nas"]);
+    let screen = f.screen(100, 16);
+    assert!(screen.contains("┌ Connections · personal "), "{screen}");
+    assert!(!screen.contains("a-company"), "{screen}");
+    assert!(!screen.contains("Read-only"), "{screen}");
+
+    f.press(KeyCode::Tab);
+    assert_eq!(visible_names(&f), ["web", "db"]);
+    f.press(KeyCode::Tab);
+    assert_eq!(visible_names(&f), ["api"]);
+    f.press(KeyCode::Tab);
+    assert_eq!(visible_names(&f), ["scratch"]);
+    assert!(f.screen(100, 16).contains("┌ Connections · (no group) "));
+    f.press(KeyCode::Tab);
+    assert_eq!(visible_names(&f).len(), 7);
+
+    // Back in the full list the cursor is still on the same connection.
+    assert_eq!(f.selected(), "scratch");
+
+    // Shift+Tab goes the other way.
+    f.press(KeyCode::BackTab);
+    assert_eq!(visible_names(&f), ["scratch"]);
+    f.press(KeyCode::BackTab);
+    f.press(KeyCode::BackTab);
+    f.press(KeyCode::BackTab);
+    assert_eq!(visible_names(&f), ["laptop", "nas"]);
+
+    // The selection follows when the connection is in the next view too.
+    f.press(KeyCode::Down);
+    assert_eq!(f.selected(), "nas");
+    f.press(KeyCode::BackTab);
+    assert_eq!(visible_names(&f).len(), 7);
+    assert_eq!(f.selected(), "nas");
+    f.press(KeyCode::Tab);
+
+    // Search works inside the group view, and finds by group name overall.
+    f.press(KeyCode::Char('/'));
+    f.chars("laptop");
+    assert_eq!(visible_names(&f), ["laptop"]);
+    f.press(KeyCode::Esc);
+    f.press(KeyCode::BackTab);
+    f.press(KeyCode::Char('/'));
+    f.chars("b-company");
+    assert_eq!(f.selected(), "api");
+}
+
+#[test]
+fn the_form_sets_and_clears_the_group() {
+    let mut f = Fixture::new(GROUPED);
+    // scratch has no group: pick an existing one from the list.
+    for _ in 0..5 {
+        f.press(KeyCode::Down);
+    }
+    assert_eq!(f.selected(), "scratch");
+    f.press(KeyCode::Char('e'));
+    f.press(KeyCode::BackTab);
+    f.press(KeyCode::Enter);
+    let screen = f.screen(100, 22);
+    assert!(screen.contains("┌ Group "), "{screen}");
+    for name in ["None", "personal", "a-company", "b-company"] {
+        assert!(screen.contains(name), "{name}: {screen}");
+    }
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Enter);
+    assert!(f.screen(100, 22).contains("+ # sshcm:group a-company"));
+    f.ctrl('s');
+    assert_eq!(
+        f.config(),
+        GROUPED.replace("Host scratch\n", "# sshcm:group a-company\nHost scratch\n")
+    );
+    // The saved connection is selected, now under its group.
+    assert_eq!(f.selected(), "scratch");
+    assert_eq!(
+        visible_names(&f),
+        ["laptop", "nas", "web", "scratch", "db", "api", "*"]
+    );
+
+    // A new group is simply typed.
+    f.press(KeyCode::Char('e'));
+    f.press(KeyCode::BackTab);
+    f.clear();
+    f.chars("two words");
+    assert!(
+        f.screen(100, 22)
+            .contains("Group 'two words' is not valid.")
+    );
+    f.clear();
+    f.chars("workspace");
+    f.ctrl('s');
+    assert!(
+        f.config()
+            .contains("# sshcm:group workspace\nHost scratch\n")
+    );
+
+    // Clearing the field takes the connection out of its group.
+    f.press(KeyCode::Char('e'));
+    f.press(KeyCode::BackTab);
+    f.clear();
+    f.ctrl('s');
+    assert_eq!(f.config(), GROUPED);
+}
+
+#[test]
+fn saving_from_a_group_view_shows_the_saved_connection() {
+    let mut f = Fixture::new(GROUPED);
+    f.press(KeyCode::Tab);
+    // Move laptop from personal to b-company while only personal is shown.
+    f.press(KeyCode::Char('e'));
+    f.press(KeyCode::BackTab);
+    f.clear();
+    f.chars("b-company");
+    f.ctrl('s');
+    assert_eq!(f.selected(), "laptop");
+    assert_eq!(f.app.visible.len(), 7);
+}
+
+#[test]
+fn removing_the_last_connection_of_a_group_leaves_its_view() {
+    let mut f = Fixture::new(GROUPED);
+    f.press(KeyCode::Tab);
+    f.press(KeyCode::Tab);
+    f.press(KeyCode::Tab);
+    assert_eq!(visible_names(&f), ["api"]);
+    f.press(KeyCode::Char('d'));
+    f.press(KeyCode::Right);
+    f.press(KeyCode::Enter);
+    // b-company is gone, so the list goes back to showing everything.
+    assert_eq!(
+        visible_names(&f),
+        ["laptop", "nas", "web", "db", "scratch", "*"]
+    );
+    assert!(!f.config().contains("b-company"));
+}
+
+#[test]
+fn a_copy_stays_in_the_group_of_its_source() {
+    let mut f = Fixture::new(GROUPED);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Down);
+    f.press(KeyCode::Char('c'));
+    f.chars("web2");
+    f.ctrl('s');
+    assert!(
+        f.config().contains(
+            "# sshcm:group a-company\nHost web2\n    HostName 10.0.2.10\n    User deploy\n"
+        )
+    );
+}

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use crate::model::{Connection, Proxy, hop_host, replace_hop_host};
 use crate::parser::{Line, parse_lines, quote_if_needed, render};
 
+const GROUP_PREFIX: &str = "sshcm:group";
 const DESC_PREFIX: &str = "sshcm:desc";
 const TAGS_PREFIX: &str = "sshcm:tags";
 const DEFAULT_INDENT: &str = "    ";
@@ -307,6 +308,9 @@ impl Document {
                 set_setting(&mut block, key, Some(&value), eol);
             }
         }
+        if old.group != new.group {
+            set_meta(&mut block, GROUP_PREFIX, new.group.as_deref(), eol);
+        }
         if old.description != new.description {
             set_meta(&mut block, DESC_PREFIX, new.description.as_deref(), eol);
         }
@@ -405,6 +409,9 @@ pub fn is_pattern(name: &str) -> bool {
 /// out, which keeps blocks short and lets `Host *` defaults apply.
 pub fn render_block(conn: &Connection, indent: &str, eol: &str) -> Vec<Line> {
     let mut lines = Vec::new();
+    if let Some(group) = &conn.group {
+        lines.push(Line::comment(&format!("# {GROUP_PREFIX} {group}"), eol));
+    }
     if let Some(desc) = &conn.description {
         lines.push(Line::comment(&format!("# {DESC_PREFIX} {desc}"), eol));
     }
@@ -459,7 +466,9 @@ fn read_connection(block: &[Line], alias: String) -> Connection {
     let mut proxy_seen = false;
 
     for line in &block[..head] {
-        if let Some(desc) = meta_value(line, DESC_PREFIX) {
+        if let Some(group) = meta_value(line, GROUP_PREFIX) {
+            conn.group = Some(group).filter(|g| !g.is_empty());
+        } else if let Some(desc) = meta_value(line, DESC_PREFIX) {
             conn.description = Some(desc).filter(|d| !d.is_empty());
         } else if let Some(tags) = meta_value(line, TAGS_PREFIX) {
             conn.tags = tags
@@ -552,8 +561,10 @@ fn set_setting(block: &mut Vec<Line>, key: &str, value: Option<&str>, eol: &str)
     }
 }
 
+/// The order of the `# sshcm:` comments above a `Host` line.
+const META_ORDER: [&str; 3] = [GROUP_PREFIX, DESC_PREFIX, TAGS_PREFIX];
+
 /// Sets, replaces or removes a `# sshcm:` comment above the `Host` line.
-/// The description always sits above the tags.
 fn set_meta(block: &mut Vec<Line>, prefix: &str, value: Option<&str>, eol: &str) {
     let head = head_index(block);
     let existing = (0..head).find(|&i| meta_value(&block[i], prefix).is_some());
@@ -567,13 +578,16 @@ fn set_meta(block: &mut Vec<Line>, prefix: &str, value: Option<&str>, eol: &str)
             block[i] = Line::comment(&format!("{indent}# {prefix} {value}"), block[i].eol());
         }
         (Some(value), None) => {
-            let at = if prefix == DESC_PREFIX {
-                (0..head)
-                    .find(|&i| meta_value(&block[i], TAGS_PREFIX).is_some())
-                    .unwrap_or(head)
-            } else {
-                head
-            };
+            // Keep the order group, description, tags: the new line goes
+            // before the first existing line that ranks after it.
+            let rank = |p: &str| META_ORDER.iter().position(|m| *m == p);
+            let at = (0..head)
+                .find(|&i| {
+                    META_ORDER
+                        .iter()
+                        .any(|m| rank(m) > rank(prefix) && meta_value(&block[i], m).is_some())
+                })
+                .unwrap_or(head);
             block.insert(
                 at,
                 Line::comment(&format!("{indent}# {prefix} {value}"), eol),
@@ -949,6 +963,60 @@ Match host";
         );
         assert_eq!(doc.rename_jump_host("gate", "bastion"), ["a"]);
         assert!(doc.render().contains("ProxyJump first,ops@bastion:2222\n"));
+    }
+
+    #[test]
+    fn group_is_stored_as_a_comment_above_the_block() {
+        let mut doc = Document::parse("");
+        let mut c = conn("web", "10.0.2.10");
+        c.group = Some("a-company".to_string());
+        c.description = Some("Web".to_string());
+        c.tags = vec!["prod".to_string()];
+        doc.add(&c);
+        assert_eq!(
+            doc.render(),
+            "# sshcm:group a-company\n# sshcm:desc Web\n# sshcm:tags prod\nHost web\n    HostName 10.0.2.10\n"
+        );
+        assert_eq!(entry(&doc, "web").conn, c);
+    }
+
+    #[test]
+    fn update_group_keeps_the_comment_order() {
+        // Tags first, then the description, then the group: the result is
+        // always group, description, tags, whatever order they arrive in.
+        let mut doc = Document::parse(SAMPLE);
+        for step in 0..3 {
+            let mut c = entry(&doc, "bastion").conn;
+            match step {
+                0 => c.tags = vec!["prod".to_string()],
+                1 => c.group = Some("a-company".to_string()),
+                _ => c.description = Some("Gateway".to_string()),
+            }
+            doc.update("bastion", &c).unwrap();
+        }
+        assert_only_change(
+            SAMPLE,
+            &doc.render(),
+            "# Jump host for the production network\nHost bastion\n",
+            "# Jump host for the production network\n# sshcm:group a-company\n# sshcm:desc Gateway\n# sshcm:tags prod\nHost bastion\n",
+        );
+
+        // Move to another group, then out of every group.
+        let mut c = entry(&doc, "bastion").conn;
+        c.group = Some("personal".to_string());
+        doc.update("bastion", &c).unwrap();
+        assert!(
+            doc.render()
+                .contains("# sshcm:group personal\n# sshcm:desc Gateway\n")
+        );
+        let mut c = entry(&doc, "bastion").conn;
+        c.group = None;
+        doc.update("bastion", &c).unwrap();
+        assert!(!doc.render().contains("sshcm:group"));
+        assert!(
+            doc.render()
+                .contains("# sshcm:desc Gateway\n# sshcm:tags prod\nHost bastion\n")
+        );
     }
 
     #[test]

@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-17
+
+### Added
+
+- Groups: a connection can belong to a workspace such as `personal` or
+  `a-company`, stored as a `# sshcm:group` comment above its block.
+  `--group` on `add` and `edit` sets it (an empty value clears it),
+  `sshcm list` shows connections under their group, `sshcm list --group`
+  shows one group and `sshcm groups` lists them with their sizes.
+- The full-screen interface lists connections under their group, `Tab` and
+  `Shift+Tab` step through one group at a time, the search also matches group
+  names, and the form has a Group field with a list of the groups in use.
+- `group` in the JSON output of `list` and `show`.
+
 ## [0.5.0] - 2026-11-17
 
 ### Changed

@@ -56,6 +56,9 @@ pub fn run(ctx: &Ctx, alias: Option<String>, json: bool) -> Result<()> {
         ),
         ("Proxy", proxy),
     ];
+    if let Some(group) = &conn.group {
+        rows.push((tr("Group", "Grup"), group.clone()));
+    }
     if let Some(description) = &conn.description {
         rows.push((tr("Description", "Açıklama"), description.clone()));
     }

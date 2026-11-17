@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use inquire::Text;
 use inquire::validator::Validation;
 use sshcm_core::model::{
-    self, collapse_tilde, expand_tilde, parse_port, parse_tags, validate_alias, validate_hop,
-    validate_hostname, validate_proxy_address, validate_user,
+    self, collapse_tilde, expand_tilde, parse_port, parse_tags, validate_alias, validate_group,
+    validate_hop, validate_hostname, validate_proxy_address, validate_user,
 };
 use sshcm_core::{Connection, DEFAULT_PORT, Known, Proxy, Store, ValidationError};
 
@@ -28,6 +28,7 @@ pub struct Skip {
     pub proxy: bool,
     pub description: bool,
     pub tags: bool,
+    pub group: bool,
 }
 
 impl Skip {
@@ -41,6 +42,7 @@ impl Skip {
             proxy: true,
             description: true,
             tags: true,
+            group: true,
         }
     }
 }
@@ -218,6 +220,37 @@ pub fn fill(
             |input| parse_tags(input).map(|_| ()),
         )?;
         conn.tags = parse_tags(&answer.unwrap_or_default())?;
+    }
+
+    if !skip.group {
+        let existing: Vec<String> = store.groups().into_iter().map(|(name, _)| name).collect();
+        let help = if existing.is_empty() {
+            tr(
+                "Optional: a workspace such as personal or a-company",
+                "İsteğe bağlı: personal veya a-company gibi bir çalışma alanı",
+            )
+            .to_string()
+        } else {
+            trf(
+                "Optional. Groups in use: {}",
+                "İsteğe bağlı. Kullanılan gruplar: {}",
+                &[&existing.join(", ")],
+            )
+        };
+        let unchanged = conn.group.clone().unwrap_or_default();
+        conn.group = ask(
+            tr("Group:", "Grup:"),
+            conn.group.as_deref(),
+            None,
+            Some(&help),
+            move |input| {
+                if input.is_empty() || (editing && input == unchanged) {
+                    Ok(())
+                } else {
+                    validate_group(input)
+                }
+            },
+        )?;
     }
 
     Ok(conn)

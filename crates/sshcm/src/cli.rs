@@ -40,9 +40,12 @@ pub enum Cmd {
     List {
         #[arg(long, value_name = "TAG")]
         tag: Option<String>,
+        #[arg(long, value_name = "GROUP")]
+        group: Option<String>,
         #[arg(long)]
         json: bool,
     },
+    Groups,
     Show {
         alias: Option<String>,
         #[arg(long)]
@@ -131,6 +134,9 @@ pub struct Fields {
 
     #[arg(long, value_name = "TAGS")]
     pub tags: Option<String>,
+
+    #[arg(long, value_name = "GROUP")]
+    pub group: Option<String>,
 }
 
 impl Fields {
@@ -151,6 +157,7 @@ impl Fields {
             || self.has_proxy()
             || self.desc.is_some()
             || self.tags.is_some()
+            || self.group.is_some()
     }
 
     /// Copies the given flags onto `conn`.
@@ -187,6 +194,9 @@ impl Fields {
         }
         if let Some(v) = &self.tags {
             conn.tags = parse_tags(v)?;
+        }
+        if let Some(v) = &self.group {
+            conn.group = non_empty(v);
         }
         Ok(())
     }
@@ -246,7 +256,19 @@ pub fn command() -> Command {
                         "Yalnızca bu etiketi taşıyan bağlantıları göster",
                     ))
                 })
+                .mut_arg("group", |a| {
+                    a.help(tr(
+                        "Only show connections of this group",
+                        "Yalnızca bu gruptaki bağlantıları göster",
+                    ))
+                })
                 .mut_arg("json", json_help)
+        })
+        .mut_subcommand("groups", |c| {
+            c.about(tr(
+                "List the groups and how many connections each has",
+                "Grupları ve her birindeki bağlantı sayısını listele",
+            ))
         })
         .mut_subcommand("show", |c| {
             c.about(tr(
@@ -439,6 +461,12 @@ fn fields_help(cmd: Command) -> Command {
     })
     .mut_arg("tags", |a| {
         a.help(tr("Comma-separated tags", "Virgülle ayrılmış etiketler"))
+    })
+    .mut_arg("group", |a| {
+        a.help(tr(
+            "Group (workspace) the connection belongs to",
+            "Bağlantının ait olduğu grup (çalışma alanı)",
+        ))
     })
 }
 

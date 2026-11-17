@@ -114,6 +114,9 @@ pub struct Connection {
     pub identity_file: Option<String>,
     /// `ProxyJump` or `ProxyCommand`
     pub proxy: Proxy,
+    /// `# sshcm:group` comment above the block: the workspace this
+    /// connection belongs to. A connection has at most one group.
+    pub group: Option<String>,
     /// `# sshcm:desc` comment above the block.
     pub description: Option<String>,
     /// `# sshcm:tags` comment above the block.
@@ -168,6 +171,7 @@ pub enum ValidationError {
     ProxyAddressInvalid,
     ProxyCommandEmpty,
     TagInvalid(String),
+    GroupInvalid(String),
     DescriptionMultiline,
 }
 
@@ -194,6 +198,10 @@ impl fmt::Display for ValidationError {
             ProxyAddressInvalid => write!(f, "Proxy address must look like host:port."),
             ProxyCommandEmpty => write!(f, "Proxy command cannot be empty."),
             TagInvalid(t) => write!(f, "Tag '{t}' is not valid. Use letters, digits and '-'."),
+            GroupInvalid(g) => write!(
+                f,
+                "Group '{g}' is not valid. Use letters, digits, '-', '_' and '.'."
+            ),
             DescriptionMultiline => write!(f, "Description must be a single line."),
         }
     }
@@ -300,6 +308,20 @@ pub fn parse_tags(input: &str) -> Result<Vec<String>, ValidationError> {
         }
     }
     Ok(tags)
+}
+
+/// Checks a group name: one word of letters, digits, `-`, `_` and `.`.
+pub fn validate_group(group: &str) -> Result<(), ValidationError> {
+    let ok = !group.is_empty()
+        && !group.starts_with('-')
+        && group
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(ValidationError::GroupInvalid(group.to_string()))
+    }
 }
 
 /// Checks a description: one line of free text.
@@ -435,6 +457,11 @@ pub fn validate(
     }
     if before.is_none_or(|b| b.tags != conn.tags) {
         parse_tags(&conn.tags.join(","))?;
+    }
+    if let Some(group) = &conn.group
+        && before.is_none_or(|b| b.group.as_ref() != Some(group))
+    {
+        validate_group(group)?;
     }
     Ok(())
 }
@@ -736,6 +763,33 @@ mod tests {
         assert!(parse_tags("a b").is_err());
         assert!(validate_description("one line").is_ok());
         assert!(validate_description("two\nlines").is_err());
+    }
+
+    #[test]
+    fn group_names() {
+        for good in [
+            "personal",
+            "a-company",
+            "b_company",
+            "client.eu",
+            "şirket",
+            "2026",
+        ] {
+            assert!(validate_group(good).is_ok(), "{good}");
+        }
+        for bad in ["", "two words", "a,b", "-dash", "a/b", "a#b"] {
+            assert_eq!(
+                validate_group(bad),
+                Err(ValidationError::GroupInvalid(bad.to_string())),
+                "{bad}"
+            );
+        }
+        let mut c = conn("a");
+        c.group = Some("not valid".to_string());
+        assert!(check(&c, None, &Known::default()).is_err());
+        // A group that is already in the file is left alone.
+        let home = Path::new("/nonexistent");
+        assert!(validate(&c, Some(&c), &Known::default(), home).is_ok());
     }
 
     #[test]

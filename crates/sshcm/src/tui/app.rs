@@ -11,7 +11,7 @@ use sshcm_core::{Entry, SaveReport, Store, Verification};
 
 use super::form::{Form, Outcome};
 use super::input::TextInput;
-use crate::commands::Ctx;
+use crate::commands::{Ctx, by_group};
 use crate::error::Result;
 use crate::i18n::{self, tr, trf};
 
@@ -37,6 +37,17 @@ pub enum Tone {
 pub struct Status {
     pub tone: Tone,
     pub text: String,
+}
+
+/// Which connections the list shows.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum GroupFilter {
+    #[default]
+    All,
+    /// Only the connections of one group.
+    Group(String),
+    /// Only the connections that belong to no group.
+    Ungrouped,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +77,8 @@ pub struct App {
     pub selected: usize,
     pub search: TextInput,
     pub searching: bool,
+    /// Changed with Tab; shown in the title of the list.
+    pub group_filter: GroupFilter,
     pub status: Option<Status>,
     pub screen: Screen,
     /// Lines the detail panel is scrolled down by.
@@ -86,6 +99,7 @@ impl App {
             selected: 0,
             search: TextInput::default(),
             searching: false,
+            group_filter: GroupFilter::All,
             status: None,
             screen: Screen::Main,
             detail_scroll: 0,
@@ -113,8 +127,13 @@ impl App {
             .or_else(|| self.current().map(|e| e.alias().to_string()));
         let (patterns, connections): (Vec<Entry>, Vec<Entry>) =
             self.store.entries().into_iter().partition(|e| e.is_pattern);
-        self.entries = connections;
+        // Connections of one group stay together, as in `sshcm list`.
+        self.entries = by_group(connections, |e| e.conn.group.as_deref());
         self.entries.extend(patterns);
+        // A filter on a group that no longer exists would hide everything.
+        if !self.group_filters().contains(&self.group_filter) {
+            self.group_filter = GroupFilter::All;
+        }
         self.filter();
         if let Some(alias) = keep
             && let Some(position) = self
@@ -138,21 +157,34 @@ impl App {
     /// Applies the search text: fuzzy match on alias, address, user and tags.
     fn filter(&mut self) {
         let query = self.search.text().to_string();
+        let in_group: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| {
+                let entry = &self.entries[i];
+                match &self.group_filter {
+                    GroupFilter::All => true,
+                    // Patterns belong to no workspace view.
+                    GroupFilter::Group(name) => {
+                        !entry.is_pattern && entry.conn.group.as_deref() == Some(name)
+                    }
+                    GroupFilter::Ungrouped => !entry.is_pattern && entry.conn.group.is_none(),
+                }
+            })
+            .collect();
         if query.is_empty() {
-            self.visible = (0..self.entries.len()).collect();
+            self.visible = in_group;
         } else {
             let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
             let mut buffer = Vec::new();
-            let mut scored: Vec<(u32, usize)> = self
-                .entries
-                .iter()
-                .enumerate()
+            let mut scored: Vec<(u32, usize)> = in_group
+                .into_iter()
+                .map(|i| (i, &self.entries[i]))
                 .filter_map(|(i, entry)| {
                     let haystack = format!(
-                        "{} {} {}",
+                        "{} {} {} {}",
                         entry.patterns.join(" "),
                         entry.conn.target(),
-                        entry.conn.tags.join(" ")
+                        entry.conn.tags.join(" "),
+                        entry.conn.group.as_deref().unwrap_or("")
                     );
                     pattern
                         .score(Utf32Str::new(&haystack, &mut buffer), &mut self.matcher)
@@ -164,6 +196,60 @@ impl App {
             self.visible = scored.into_iter().map(|(_, i)| i).collect();
         }
         self.selected = self.selected.min(self.visible.len().saturating_sub(1));
+    }
+
+    /// True when at least one connection belongs to a group.
+    pub fn has_groups(&self) -> bool {
+        self.entries.iter().any(|e| e.conn.group.is_some())
+    }
+
+    /// The views Tab steps through: everything, each group in list order,
+    /// and the connections without a group when there are any.
+    fn group_filters(&self) -> Vec<GroupFilter> {
+        let mut filters = vec![GroupFilter::All];
+        let connections = || self.entries.iter().filter(|e| !e.is_pattern);
+        for entry in connections() {
+            if let Some(group) = &entry.conn.group {
+                let filter = GroupFilter::Group(group.clone());
+                if !filters.contains(&filter) {
+                    filters.push(filter);
+                }
+            }
+        }
+        if filters.len() > 1 && connections().any(|e| e.conn.group.is_none()) {
+            filters.push(GroupFilter::Ungrouped);
+        }
+        filters
+    }
+
+    fn cycle_group(&mut self, forward: bool) {
+        let filters = self.group_filters();
+        if filters.len() < 2 {
+            return;
+        }
+        let keep = self.current().map(|e| e.alias().to_string());
+        let at = filters
+            .iter()
+            .position(|f| *f == self.group_filter)
+            .unwrap_or(0);
+        let n = filters.len();
+        self.group_filter = filters[if forward {
+            (at + 1) % n
+        } else {
+            (at + n - 1) % n
+        }]
+        .clone();
+        self.selected = 0;
+        self.filter();
+        // Stay on the same connection when it is still in view.
+        if let Some(alias) = keep
+            && let Some(position) = self
+                .visible
+                .iter()
+                .position(|&i| self.entries[i].alias() == alias)
+        {
+            self.selected = position;
+        }
     }
 
     fn set_status(&mut self, tone: Tone, text: String) {
@@ -252,6 +338,8 @@ impl App {
                 self.selected = self.visible.len().saturating_sub(1);
             }
             KeyCode::Char('/') => self.searching = true,
+            KeyCode::Tab => self.cycle_group(true),
+            KeyCode::BackTab => self.cycle_group(false),
             KeyCode::Esc if !self.search.is_empty() => {
                 self.search.set("");
                 self.filter();
@@ -423,6 +511,7 @@ impl App {
                 // Show the saved connection even if a search would hide it.
                 self.search.set("");
                 self.searching = false;
+                self.group_filter = GroupFilter::All;
                 self.refresh(Some(&alias));
                 self.saved_status(
                     trf("Saved {}", "{} kaydedildi", &[&alias]),

@@ -242,6 +242,22 @@ impl Store {
             .cloned()
     }
 
+    /// The groups in use with the number of connections in each, in the
+    /// order they first appear. Patterns are not counted.
+    pub fn groups(&self) -> Vec<(String, usize)> {
+        let mut groups: Vec<(String, usize)> = Vec::new();
+        for entry in self.entries().iter().filter(|e| !e.is_pattern) {
+            let Some(group) = &entry.conn.group else {
+                continue;
+            };
+            match groups.iter_mut().find(|(name, _)| name == group) {
+                Some((_, count)) => *count += 1,
+                None => groups.push((group.clone(), 1)),
+            }
+        }
+        groups
+    }
+
     /// Names of the connections that use `alias` as a jump host.
     pub fn dependents(&self, alias: &str) -> Vec<String> {
         dependents(&self.entries(), alias)
