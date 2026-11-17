@@ -30,18 +30,32 @@ Port 22 is the default, so it is not written.
 ✓ Config check passed  ssh -G ihu
 ```
 
-> **Status:** v0.1 is in development and not released yet. Runs on macOS and
-> Linux.
+Runs on macOS and Linux.
 
 ## Install
 
-Until the first release, build from source. You need Rust 1.100 or newer.
+Homebrew:
+
+```sh
+brew install empatisoft/tap/sshcm
+```
+
+Install script (downloads the prebuilt binary for your platform into
+`~/.cargo/bin`):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/empatisoft/sshcm/releases/latest/download/sshcm-installer.sh | sh
+```
+
+Prebuilt binaries for macOS and Linux (aarch64 and x86_64; the Linux builds
+are static) are on the
+[releases page](https://github.com/empatisoft/sshcm/releases).
+
+From source, with Rust 1.100 or newer:
 
 ```sh
 cargo install --git https://github.com/empatisoft/sshcm sshcm
 ```
-
-Homebrew, crates.io and prebuilt binaries are planned for v0.2.
 
 ## Usage
 
@@ -165,7 +179,7 @@ settings file. Command names and flags are the same in every language.
 
 ## Roadmap
 
-- v0.2: Homebrew tap, crates.io, prebuilt binaries
+- v0.2: crates.io (`cargo install sshcm`)
 - v0.3: edit and remove connections inside `Include`d files
 - v0.5: full-screen terminal interface
 - v1.0: stable command line
