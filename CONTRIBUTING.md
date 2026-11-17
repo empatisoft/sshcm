@@ -4,7 +4,10 @@ Thanks for your interest in sshcm.
 
 ## Development
 
-You need Rust 1.100 or newer and an OpenSSH client (`ssh`) on your `PATH`.
+You need an OpenSSH client (`ssh`) on your `PATH`. `rust-toolchain.toml` pins
+the Rust version used for development and releases; rustup installs it on the
+first `cargo` command. The oldest Rust that sshcm must build with is the
+`rust-version` in `Cargo.toml` (1.88), which CI checks separately.
 
 ```sh
 cargo fmt --all --check
@@ -61,15 +64,20 @@ One-time setup:
 1. Create the public repository `empatisoft/homebrew-tap`.
 2. Add a repository secret `HOMEBREW_TAP_TOKEN` to `empatisoft/sshcm`: a
    token that can push to the tap repository.
+3. Optional: add a repository secret `CARGO_REGISTRY_TOKEN` (a crates.io API
+   token that may publish new versions). With it, the crates are published
+   automatically; without it, step 4 below is done by hand.
 
 For each release:
 
-1. Set the version in the root `Cargo.toml` (and the `sshcm-core` version in
-   `crates/sshcm/Cargo.toml`), and move the `Unreleased` notes in
-   `CHANGELOG.md` under the new version.
+1. Set the version in the root `Cargo.toml`, in both places: `version` under
+   `[workspace.package]` and the `sshcm-core` line under
+   `[workspace.dependencies]`. Move the `Unreleased` notes in `CHANGELOG.md`
+   under the new version.
 2. Check what will be built: `dist plan`.
-3. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`. GitHub Actions
+3. Tag and push: `git tag v0.5.0 && git push origin v0.5.0`. GitHub Actions
    builds the macOS and Linux binaries, creates the GitHub Release and updates
    the Homebrew formula.
-4. Publish to crates.io, core first:
-   `cargo publish -p sshcm-core && cargo publish -p sshcm`.
+4. crates.io: the "Publish crates" workflow runs after a successful release.
+   Without the token, publish by hand from a clean checkout of the tag, core
+   first: `cargo publish -p sshcm-core && cargo publish -p sshcm`.

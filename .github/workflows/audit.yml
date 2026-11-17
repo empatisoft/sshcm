@@ -1,0 +1,26 @@
+# Checks the dependencies against the RustSec advisory database: every
+# Monday, and whenever the dependency list changes.
+name: Audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - .github/workflows/audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit

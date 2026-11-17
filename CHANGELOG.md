@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The minimum Rust version for building from source is now 1.88 instead of
+  1.100, so `cargo install sshcm` works with older toolchains.
+
+### Added
+
+- Releases publish to crates.io automatically when the repository has a
+  `CARGO_REGISTRY_TOKEN` secret.
+- Weekly dependency updates (Dependabot) and a RustSec advisory check.
+- `SECURITY.md` with how to report a vulnerability.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added

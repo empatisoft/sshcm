@@ -51,7 +51,7 @@ Prebuilt binaries for macOS and Linux (aarch64 and x86_64; the Linux builds
 are static) are on the
 [releases page](https://github.com/empatisoft/sshcm/releases).
 
-With Cargo (builds from source; needs Rust 1.100 or newer):
+With Cargo (builds from source; needs Rust 1.88 or newer):
 
 ```sh
 cargo install sshcm

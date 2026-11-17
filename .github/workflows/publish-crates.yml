@@ -1,0 +1,54 @@
+# Publishes both crates to crates.io after the Release workflow has
+# finished successfully for a version tag.
+#
+# Needs the repository secret CARGO_REGISTRY_TOKEN. Without it the job ends
+# with a notice and the crates have to be published by hand:
+#   cargo publish -p sshcm-core && cargo publish -p sshcm
+name: Publish crates
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    # Only after a successful release run that was started by a tag push
+    # (the Release workflow also runs, without releasing, on pull requests).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - name: Check for the crates.io token
+        id: token
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::notice::CARGO_REGISTRY_TOKEN is not set; skipping crates.io. Publish by hand with cargo publish."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.token.outputs.present == 'true'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Publish sshcm-core, then sshcm
+        if: steps.token.outputs.present == 'true'
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import sys, json; print(json.load(sys.stdin)["packages"][0]["version"])')
+          for crate in sshcm-core sshcm; do
+            # A version that is already on crates.io is left alone, so the
+            # job can be re-run and a manual publish does not break it.
+            if curl -fsS -A "sshcm-release-workflow" "https://crates.io/api/v1/crates/$crate/$version" > /dev/null 2>&1; then
+              echo "$crate $version is already published"
+            else
+              cargo publish -p "$crate"
+            fi
+          done

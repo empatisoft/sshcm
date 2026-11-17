@@ -5,12 +5,17 @@ members = ["crates/sshcm-core", "crates/sshcm"]
 [workspace.package]
 version = "0.4.0"
 edition = "2024"
-rust-version = "1.100"
+rust-version = "1.88"
 license = "MIT"
 authors = ["Onur Kaya"]
 repository = "https://github.com/empatisoft/sshcm"
 keywords = ["ssh", "ssh-config", "cli"]
 categories = ["command-line-utilities"]
+
+[workspace.dependencies]
+# The core is released together with the binary; its version is the
+# workspace version above.
+sshcm-core = { path = "crates/sshcm-core", version = "0.4.0" }
 
 [profile.release]
 lto = true
