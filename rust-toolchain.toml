@@ -1,0 +1,5 @@
+# Pins the toolchain for local builds, CI and release builds. The release
+# runners ship an older Rust; with this file rustup installs the right one.
+[toolchain]
+channel = "1.100"
+components = ["rustfmt", "clippy"]
