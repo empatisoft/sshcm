@@ -51,10 +51,10 @@ Prebuilt binaries for macOS and Linux (aarch64 and x86_64; the Linux builds
 are static) are on the
 [releases page](https://github.com/empatisoft/sshcm/releases).
 
-From source, with Rust 1.100 or newer:
+With Cargo (builds from source; needs Rust 1.100 or newer):
 
 ```sh
-cargo install --git https://github.com/empatisoft/sshcm sshcm
+cargo install sshcm
 ```
 
 ## Usage
@@ -179,7 +179,6 @@ settings file. Command names and flags are the same in every language.
 
 ## Roadmap
 
-- v0.2: crates.io (`cargo install sshcm`)
 - v0.3: edit and remove connections inside `Include`d files
 - v0.5: full-screen terminal interface
 - v1.0: stable command line
