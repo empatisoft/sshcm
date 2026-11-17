@@ -149,6 +149,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 Some(Overlay::Keys(picker)) => draw_key_picker(frame, body, picker, theme),
                 None => {}
             }
+            if let Some(discard_selected) = form.discard {
+                draw_discard(frame, body, discard_selected, theme);
+            }
         }
         screen => {
             draw_main_header(frame, header, app, theme);
@@ -203,6 +206,14 @@ fn draw_header(
         0,
         Span::styled("sshcm", theme.accent().patch(theme.strong())),
     );
+    if app.ctx.dry_run {
+        // Always visible, so nobody takes a dry run for the real thing.
+        left.push(Span::raw("  "));
+        left.push(Span::styled(
+            format!(" {} ", tr("dry run", "deneme")),
+            theme.warn().patch(theme.chosen()),
+        ));
+    }
     let path = app.store.display_path();
     frame.render_widget(Paragraph::new(Line::from(left)), area);
     frame.render_widget(
@@ -322,6 +333,26 @@ fn draw_main_footer(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
 }
 
 fn draw_form_footer(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme: Theme) {
+    if form.discard.is_some() {
+        draw_footer(
+            frame,
+            area,
+            Line::styled(
+                tr(
+                    "Keep editing is selected by default.",
+                    "Varsayılan seçim düzenlemeye devam etmektir.",
+                ),
+                theme.dim(),
+            ),
+            &[
+                ("←→", tr("choose", "seç")),
+                ("enter", tr("confirm", "onayla")),
+                ("esc", tr("keep editing", "düzenlemeye dön")),
+            ],
+            theme,
+        );
+        return;
+    }
     match &form.overlay {
         Some(Overlay::Proxy(picker)) => {
             let hints: Vec<(&str, &str)> = match picker.kind {
@@ -1154,6 +1185,49 @@ fn draw_delete(frame: &mut Frame, area: Rect, app: &App, dialog: &DeleteDialog, 
         ])
         .right_aligned(),
     );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Asked after Esc on a form with changes.
+fn draw_discard(frame: &mut Frame, area: Rect, discard_selected: bool, theme: Theme) {
+    let inner = popup(
+        frame,
+        area,
+        52,
+        5,
+        tr("Discard changes?", "Değişiklikler atılsın mı?").to_string(),
+        theme.warn(),
+        theme,
+    );
+    let button = |label: &str, on: bool, style: Style| {
+        Span::styled(
+            format!(" {label} "),
+            if on { theme.chosen() } else { style },
+        )
+    };
+    let lines = vec![
+        Line::styled(
+            fit(
+                tr(
+                    "What you typed in this form has not been saved.",
+                    "Bu forma yazdıklarınız kaydedilmedi.",
+                ),
+                inner.width as usize,
+            ),
+            theme.dim(),
+        ),
+        Line::default(),
+        Line::from(vec![
+            button(
+                tr("Keep editing", "Düzenlemeye devam"),
+                !discard_selected,
+                theme.dim(),
+            ),
+            Span::raw("  "),
+            button(tr("Discard", "At"), discard_selected, theme.error()),
+        ])
+        .right_aligned(),
+    ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

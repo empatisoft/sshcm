@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-17
+
+### Fixed
+
+- `--dry-run` was ignored by the full-screen interface: saving and removing
+  wrote to the config. The interface now shows a "dry run" tag and writes
+  nothing.
+- A connection without a `HostName` line (ssh then uses the alias, as in
+  `Host github.com`) could not be edited. Only new connections need one.
+- When editing, values that were already in the file are no longer checked
+  against sshcm's own rules, so a hand-written value cannot stop you from
+  changing another setting. A value you change is still checked.
+- Setting the identity file to "none" removed every `IdentityFile` line of
+  the block. It now removes the one sshcm shows; the next one takes its
+  place.
+- Esc on a form with changes asks before discarding them. "Keep editing" is
+  the default.
+- The interface now warns, like the subcommands, when a SOCKS5 or HTTP proxy
+  is saved and `nc` is not installed.
+
+### Changed
+
+- `sshcm-core`: `model::validate` takes the connection as it was before the
+  edit instead of the old alias and a flag.
+
 ## [0.3.0] - 2026-11-17
 
 ### Added

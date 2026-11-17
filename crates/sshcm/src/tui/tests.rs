@@ -50,6 +50,14 @@ struct Fixture {
 
 impl Fixture {
     fn new(config: &str) -> Fixture {
+        Fixture::with(config, false)
+    }
+
+    fn dry_run(config: &str) -> Fixture {
+        Fixture::with(config, true)
+    }
+
+    fn with(config: &str, dry_run: bool) -> Fixture {
         let dir = TempDir::new().expect("temp dir");
         fs::create_dir(dir.path().join(".ssh")).expect("create .ssh");
         fs::write(dir.path().join(".ssh/id_ed25519"), "").expect("key");
@@ -60,7 +68,7 @@ impl Fixture {
         let ctx = Ctx {
             home: dir.path().to_path_buf(),
             config: None,
-            dry_run: false,
+            dry_run,
             yes: false,
             settings: Settings::default(),
         };
@@ -440,17 +448,166 @@ fn saving_without_changes_writes_nothing() {
 }
 
 #[test]
-fn escape_closes_the_form_without_saving() {
+fn escape_closes_an_untouched_form_at_once() {
+    let mut f = Fixture::new(CONFIG);
+    f.press(KeyCode::Char('e'));
+    f.press(KeyCode::Tab);
+    f.press(KeyCode::Esc);
+    assert!(matches!(f.app.screen, Screen::Main));
+    // Typing something and deleting it again is not a change either.
+    f.press(KeyCode::Char('a'));
+    f.chars("x");
+    f.press(KeyCode::Backspace);
+    f.press(KeyCode::Esc);
+    assert!(matches!(f.app.screen, Screen::Main));
+}
+
+#[test]
+fn escape_on_a_changed_form_asks_before_discarding() {
     let mut f = Fixture::new(CONFIG);
     f.press(KeyCode::Char('e'));
     f.chars("-changed");
     f.press(KeyCode::Esc);
+    let screen = f.screen(110, 24);
+    assert!(screen.contains("Discard changes?"), "{screen}");
+    assert!(
+        screen.contains("Keep editing is selected by default."),
+        "{screen}"
+    );
+
+    // Enter takes the default: back to the form, text intact.
+    f.press(KeyCode::Enter);
+    let Screen::Form(form) = &f.app.screen else {
+        panic!("the form must stay open");
+    };
+    assert_eq!(form.alias.value(), "bastion-changed");
+    assert!(form.discard.is_none());
+
+    // Esc inside the question also keeps editing.
+    f.press(KeyCode::Esc);
+    f.press(KeyCode::Esc);
+    assert!(matches!(f.app.screen, Screen::Form(_)));
+
+    // Choosing "Discard" closes the form without writing.
+    f.press(KeyCode::Esc);
+    f.press(KeyCode::Right);
+    f.press(KeyCode::Enter);
     assert!(matches!(f.app.screen, Screen::Main));
     assert_eq!(f.config(), CONFIG);
-    // Letters typed into the form never act as list shortcuts.
+
+    // A changed proxy counts as a change, and `y` is a shortcut.
+    open_proxy_picker(&mut f);
+    f.press(KeyCode::Tab);
+    f.chars("10.0.0.1:1080");
+    f.press(KeyCode::Enter);
+    f.press(KeyCode::Esc);
+    assert!(f.screen(110, 24).contains("Discard changes?"));
+    f.press(KeyCode::Char('y'));
+    assert!(matches!(f.app.screen, Screen::Main));
+    assert_eq!(f.config(), CONFIG);
+}
+
+#[test]
+fn letters_typed_into_the_form_are_not_list_shortcuts() {
+    let mut f = Fixture::new(CONFIG);
     f.press(KeyCode::Char('a'));
     f.chars("qdae?/");
     assert!(matches!(f.app.screen, Screen::Form(_)));
+}
+
+#[test]
+fn dry_run_writes_nothing_from_the_interface() {
+    let mut f = Fixture::dry_run(CONFIG);
+    assert!(f.screen(110, 24).contains("dry run"));
+
+    // Edit and save.
+    f.press(KeyCode::Char('e'));
+    f.press(KeyCode::Tab);
+    f.press(KeyCode::Tab);
+    f.clear();
+    f.chars("root");
+    assert!(f.screen(110, 24).contains("+     User root"));
+    f.ctrl('s');
+    assert!(matches!(f.app.screen, Screen::Main));
+    let status = f.app.status.clone().expect("status");
+    assert_eq!(
+        (status.tone, status.text.as_str()),
+        (Tone::Warn, "Dry run: nothing was written.")
+    );
+    assert_eq!(f.config(), CONFIG);
+    // The list still shows what is on disk.
+    assert!(f.screen(110, 24).contains("ops@bastion.example.com"));
+
+    // Add.
+    f.press(KeyCode::Char('a'));
+    f.chars("new");
+    f.press(KeyCode::Tab);
+    f.chars("new.example.com");
+    f.ctrl('s');
+    assert_eq!(f.config(), CONFIG);
+    assert_eq!(f.app.connection_count(), 4);
+
+    // Remove.
+    f.press(KeyCode::Char('d'));
+    f.press(KeyCode::Right);
+    f.press(KeyCode::Enter);
+    assert_eq!(f.config(), CONFIG);
+    assert_eq!(f.app.connection_count(), 4);
+    assert_eq!(
+        f.app.status.clone().expect("status").text,
+        "Dry run: nothing was written."
+    );
+    assert!(!f.dir.path().join(".ssh/sshcm-backups").exists());
+}
+
+#[test]
+fn a_block_without_hostname_can_be_edited() {
+    let config = "Host github.com\n    User git\n";
+    let mut f = Fixture::new(config);
+    f.press(KeyCode::Char('e'));
+    for _ in 0..3 {
+        f.press(KeyCode::Tab);
+    }
+    f.chars("443");
+    f.ctrl('s');
+    assert!(
+        matches!(f.app.screen, Screen::Main),
+        "{}",
+        f.screen(110, 24)
+    );
+    assert_eq!(f.config(), "Host github.com\n    User git\n    Port 443\n");
+
+    // A new connection still needs one.
+    f.press(KeyCode::Char('a'));
+    f.chars("new");
+    f.ctrl('s');
+    assert!(f.screen(110, 24).contains("HostName is required."));
+}
+
+#[test]
+fn values_already_in_the_file_do_not_block_other_edits() {
+    // Written by hand: fine for ssh, outside sshcm's own rules.
+    let config =
+        "# sshcm:tags has space\nHost odd=name\n    HostName host/with/slash\n    User -weird\n";
+    let mut f = Fixture::new(config);
+    f.press(KeyCode::Char('e'));
+    assert!(!f.screen(110, 24).contains("needs attention"));
+    for _ in 0..3 {
+        f.press(KeyCode::Tab);
+    }
+    f.chars("2222");
+    f.ctrl('s');
+    assert!(
+        matches!(f.app.screen, Screen::Main),
+        "{}",
+        f.screen(110, 24)
+    );
+    assert_eq!(f.config(), format!("{config}    Port 2222\n"));
+
+    // Touching such a value brings its rule back.
+    f.press(KeyCode::Char('e'));
+    f.chars("x");
+    assert!(f.screen(110, 24).contains("Alias cannot contain '='."));
 }
 
 #[test]

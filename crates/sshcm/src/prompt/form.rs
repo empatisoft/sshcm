@@ -96,13 +96,17 @@ pub fn fill(
 
     if !skip.alias {
         let names = known.names.clone();
+        let unchanged = conn.alias.clone();
         conn.alias = ask(
             tr("Alias:", "Alias:"),
             Some(conn.alias.as_str()).filter(|a| !a.is_empty()),
             None,
             None,
             move |input| {
-                validate_alias(input)?;
+                // A name that is already in the file is not re-judged.
+                if !editing || input != unchanged {
+                    validate_alias(input)?;
+                }
                 if names.iter().any(|n| n == input) {
                     return Err(ValidationError::AliasTaken(input.to_string()));
                 }
@@ -113,16 +117,30 @@ pub fn fill(
     }
 
     if !skip.hostname {
+        let unchanged = conn.hostname.clone().unwrap_or_default();
         conn.hostname = ask(
             tr("HostName:", "HostName:"),
             conn.hostname.as_deref(),
             None,
-            None,
-            validate_hostname,
+            // A block without HostName is valid: ssh then uses the alias.
+            editing.then(|| {
+                tr(
+                    "Leave empty to connect to the alias itself",
+                    "Alias'ın kendisine bağlanmak için boş bırakın",
+                )
+            }),
+            move |input| {
+                if editing && (input.is_empty() || input == unchanged) {
+                    Ok(())
+                } else {
+                    validate_hostname(input)
+                }
+            },
         )?;
     }
 
     if !skip.user {
+        let unchanged = conn.user.clone().unwrap_or_default();
         conn.user = ask(
             tr("User:", "User:"),
             conn.user.as_deref(),
@@ -131,8 +149,8 @@ pub fn fill(
                 "Leave empty to use your current user name",
                 "Mevcut kullanıcı adınızı kullanmak için boş bırakın",
             )),
-            |input| {
-                if input.is_empty() {
+            move |input| {
+                if input.is_empty() || (editing && input == unchanged) {
                     Ok(())
                 } else {
                     validate_user(input)

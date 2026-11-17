@@ -529,10 +529,17 @@ fn set_setting(block: &mut Vec<Line>, key: &str, value: Option<&str>, eol: &str)
             block.insert(at, Line::directive(&indent, key, value, eol));
         }
         (None, _) => {
+            // ssh reads every IdentityFile line of a block, and sshcm shows
+            // and manages only the first. Removing "the" identity file must
+            // not take the lines the user never saw with it.
+            let only_first = key.eq_ignore_ascii_case("IdentityFile");
             let mut i = head + 1;
             while i < block.len() {
                 if is_key(&block[i]) {
                     block.remove(i);
+                    if only_first {
+                        break;
+                    }
                 } else {
                     i += 1;
                 }
@@ -832,6 +839,25 @@ Match host";
             &doc.render(),
             "    HostName bastion.example.com\n    User ops\n    IdentityFile ~/.ssh/id_ed25519\n",
             "    HostName bastion.example.com\n",
+        );
+    }
+
+    #[test]
+    fn removing_the_identity_file_keeps_additional_identity_lines() {
+        let input = "Host a\n    HostName h\n    IdentityFile ~/.ssh/first\n    IdentityFile ~/.ssh/second\n    User me\n";
+        let mut doc = Document::parse(input);
+        let mut c = entry(&doc, "a").conn;
+        assert_eq!(c.identity_file.as_deref(), Some("~/.ssh/first"));
+        c.identity_file = None;
+        doc.update("a", &c).unwrap();
+        assert_eq!(
+            doc.render(),
+            "Host a\n    HostName h\n    IdentityFile ~/.ssh/second\n    User me\n"
+        );
+        // The remaining line is now the one sshcm shows.
+        assert_eq!(
+            entry(&doc, "a").conn.identity_file.as_deref(),
+            Some("~/.ssh/second")
         );
     }
 

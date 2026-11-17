@@ -175,12 +175,20 @@ pub fn warn(message: &str) {
 /// SOCKS5 and HTTP proxies rely on the OpenBSD `nc`; say so when it is
 /// missing.
 pub fn warn_if_nc_missing(conn: &Connection) {
-    if conn.proxy.needs_nc() && !exec::on_path("nc") {
-        warn(tr(
+    if let Some(message) = nc_warning(conn) {
+        warn(message);
+    }
+}
+
+/// The warning to show for a connection whose proxy needs `nc` when `nc`
+/// is not installed.
+pub fn nc_warning(conn: &Connection) -> Option<&'static str> {
+    (conn.proxy.needs_nc() && !exec::on_path("nc")).then(|| {
+        tr(
             "The nc command was not found. SOCKS5 and HTTP proxies need the OpenBSD netcat (package netcat-openbsd on Debian and Ubuntu).",
             "nc komutu bulunamadı. SOCKS5 ve HTTP proxy için OpenBSD netcat gerekir (Debian ve Ubuntu'da netcat-openbsd paketi).",
-        ));
-    }
+        )
+    })
 }
 
 /// Asks whether to connect right away, and hands over to ssh on yes.

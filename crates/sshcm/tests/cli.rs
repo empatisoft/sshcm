@@ -392,6 +392,73 @@ fn included_files_are_edited_in_place_and_patterns_are_read_only() {
 }
 
 #[test]
+fn hand_written_blocks_can_be_edited() {
+    let sb = Sandbox::new();
+    // No HostName (ssh uses the alias), and values outside sshcm's own rules.
+    let config = "Host github.com\n    User git\n\nHost odd=name\n    HostName host/with/slash\n    User -weird\n";
+    sb.write_config(config);
+
+    let run = sb.run(&["edit", "github.com", "--port", "443", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    let run = sb.run(&["edit", "odd=name", "--port", "2222", "--yes"]);
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert_eq!(
+        sb.config(),
+        "Host github.com\n    User git\n    Port 443\n\nHost odd=name\n    HostName host/with/slash\n    User -weird\n    Port 2222\n"
+    );
+
+    // Changing such a value is checked; a new connection needs a HostName.
+    let run = sb.run(&["edit", "odd=name", "--user=-other", "--yes"]);
+    assert_eq!(run.code, 1);
+    assert!(
+        run.stderr.contains("User cannot contain spaces"),
+        "{}",
+        run.stderr
+    );
+    let run = sb.run(&["add", "new", "--yes"]);
+    assert!(run.stderr.contains("HostName is required"));
+}
+
+#[test]
+fn missing_nc_is_reported_for_socks_and_http_proxies() {
+    let sb = Sandbox::new();
+    let empty = sb.home().join("empty-path");
+    fs::create_dir(&empty).unwrap();
+    let args = [
+        "add",
+        "a",
+        "--hostname",
+        "a.example.com",
+        "--socks5",
+        "10.0.0.1:1080",
+        "--yes",
+    ];
+    let run = finish(
+        sb.command()
+            .env("PATH", &empty)
+            .args(args)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(run.code, 0, "{}", run.stderr);
+    assert!(
+        run.stdout.contains("The nc command was not found."),
+        "{}",
+        run.stdout
+    );
+    // Without ssh on the PATH the config check is skipped, and said so.
+    assert!(
+        run.stdout.contains("the config was not checked"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        sb.config()
+            .contains("ProxyCommand nc -X 5 -x 10.0.0.1:1080 %h %p")
+    );
+}
+
+#[test]
 fn list_and_show() {
     let sb = Sandbox::new();
     sb.seed();

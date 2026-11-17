@@ -12,7 +12,7 @@ use sshcm_core::{
 
 use super::input::TextInput;
 use super::picker::{KeyPicker, Picked, ProxyPicker};
-use crate::commands::Ctx;
+use crate::commands::{Ctx, nc_warning};
 use crate::i18n::{self, tr};
 use crate::prompt::keys;
 
@@ -80,7 +80,11 @@ pub enum Outcome {
     Saved {
         alias: String,
         report: SaveReport,
+        /// Something the user should know about the saved connection.
+        warning: Option<String>,
     },
+    /// `--dry-run`: the change was valid, and nothing was written.
+    DryRun,
 }
 
 #[derive(Debug, Clone)]
@@ -102,7 +106,11 @@ pub struct Form {
     /// Error from the last failed save.
     pub message: Option<String>,
     pub overlay: Option<Overlay>,
+    /// Shown after Esc on a changed form; true while "Discard" is selected.
+    pub discard: Option<bool>,
     keys: Vec<String>,
+    /// Field texts and proxy as the form opened.
+    initial: (Vec<String>, Proxy),
 }
 
 impl Form {
@@ -119,7 +127,7 @@ impl Form {
             .as_ref()
             .map(|e| e.conn.clone())
             .unwrap_or_default();
-        Form {
+        let mut form = Form {
             alias: TextInput::new(&conn.alias),
             hostname: TextInput::new(conn.hostname.as_deref().unwrap_or("")),
             user: TextInput::new(conn.user.as_deref().unwrap_or("")),
@@ -132,9 +140,13 @@ impl Form {
             attempted: false,
             message: None,
             overlay: None,
+            discard: None,
             keys: keys::discover(&ctx.home),
+            initial: (Vec::new(), Proxy::None),
             original,
-        }
+        };
+        form.initial = form.snapshot();
+        form
     }
 
     fn original_alias(&self) -> Option<&str> {
@@ -199,27 +211,37 @@ impl Form {
     pub fn errors(&self, store: &Store) -> Vec<(Field, String)> {
         let mut errors: Vec<(Field, ValidationError)> = Vec::new();
         let known = store.known(self.original_alias());
+        let editing = self.original.is_some();
+        // When editing, a value that is already in the file is not judged:
+        // it must never stop the user from changing another field.
+        let check = |field: Field| !editing || self.changed(field);
 
         let alias = self.alias.text();
         if alias.is_empty() {
             if self.attempted {
                 errors.push((Field::Alias, ValidationError::AliasEmpty));
             }
-        } else if let Err(err) = validate_alias(alias) {
+        } else if let Some(err) = validate_alias(alias).err().filter(|_| check(Field::Alias)) {
             errors.push((Field::Alias, err));
         } else if known.names.iter().any(|n| n == alias) {
             errors.push((Field::Alias, ValidationError::AliasTaken(alias.to_string())));
         }
 
+        // Only a new connection needs a HostName; without one ssh uses the
+        // alias.
         if self.hostname.is_empty() {
-            if self.attempted {
+            if self.attempted && !editing {
                 errors.push((Field::HostName, ValidationError::HostNameEmpty));
             }
-        } else if let Err(err) = validate_hostname(self.hostname.text()) {
+        } else if check(Field::HostName)
+            && let Err(err) = validate_hostname(self.hostname.text())
+        {
             errors.push((Field::HostName, err));
         }
 
-        if let Err(err) = validate_user(self.user.text()) {
+        if check(Field::User)
+            && let Err(err) = validate_user(self.user.text())
+        {
             errors.push((Field::User, err));
         }
         if !self.port.is_empty()
@@ -231,13 +253,8 @@ impl Form {
         // A key path is only checked when it was changed: an existing block
         // may point at a key that lives on another machine.
         let key = self.identity_file.text();
-        let key_before = self
-            .original
-            .as_ref()
-            .and_then(|e| e.conn.identity_file.as_deref())
-            .unwrap_or("");
         if !key.is_empty()
-            && key != key_before
+            && self.changed(Field::IdentityFile)
             && !key.contains('%')
             && !expand_tilde(key, store.home()).is_file()
         {
@@ -247,7 +264,9 @@ impl Form {
             ));
         }
 
-        if let Err(err) = parse_tags(self.tags.text()) {
+        if check(Field::Tags)
+            && let Err(err) = parse_tags(self.tags.text())
+        {
             errors.push((Field::Tags, err));
         }
 
@@ -255,13 +274,12 @@ impl Form {
         // connection; what is left are proxy problems such as loops.
         if errors.is_empty()
             && !alias.is_empty()
-            && !self.hostname.is_empty()
+            && (editing || !self.hostname.is_empty())
             && let Err(err) = validate(
                 &self.connection(),
-                self.original_alias(),
+                self.original.as_ref().map(|e| &e.conn),
                 &known,
                 store.home(),
-                false,
             )
         {
             errors.push((Field::Proxy, err));
@@ -272,6 +290,32 @@ impl Form {
             .into_iter()
             .map(|(field, err)| (field, i18n::validation(&err)))
             .collect()
+    }
+
+    /// The text of every field plus the proxy: what "unchanged" is measured
+    /// against.
+    fn snapshot(&self) -> (Vec<String>, Proxy) {
+        let texts = Field::ALL
+            .iter()
+            .map(|field| {
+                self.input(*field)
+                    .map(|input| input.text().to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        (texts, self.proxy.clone())
+    }
+
+    /// True when the field's text differs from what the form opened with.
+    fn changed(&self, field: Field) -> bool {
+        let index = Field::ALL.iter().position(|f| *f == field).unwrap_or(0);
+        self.input(field)
+            .is_some_and(|input| input.text() != self.initial.0[index])
+    }
+
+    /// True when anything was typed or picked since the form opened.
+    pub fn is_dirty(&self) -> bool {
+        self.snapshot() != self.initial
     }
 
     /// The block as it would be written: every line added for a new
@@ -366,9 +410,25 @@ impl Form {
             None => {}
         }
 
+        // The "discard changes?" question takes every key while it is open.
+        if let Some(selected) = self.discard {
+            match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                    self.discard = Some(!selected);
+                }
+                KeyCode::Char('y') => return Outcome::Close,
+                KeyCode::Enter if selected => return Outcome::Close,
+                KeyCode::Enter | KeyCode::Esc | KeyCode::Char('n') => self.discard = None,
+                _ => {}
+            }
+            return Outcome::Stay;
+        }
+
         self.message = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
+            // Esc on a changed form asks first; "Keep editing" is the default.
+            KeyCode::Esc if self.is_dirty() => self.discard = Some(false),
             KeyCode::Esc => return Outcome::Close,
             KeyCode::Char('s') if ctrl => return self.save(store, ctx),
             KeyCode::Tab | KeyCode::Down => self.focus = self.focus.step(true),
@@ -414,8 +474,16 @@ impl Form {
         if !store.is_modified() {
             return Outcome::Unchanged;
         }
+        if ctx.dry_run {
+            // Valid, and that is all: put the store back as it is on disk.
+            if let Ok(fresh) = ctx.load() {
+                *store = fresh;
+            }
+            return Outcome::DryRun;
+        }
         match store.save(&ctx.save_options(Some(&conn.alias))) {
             Ok(report) => Outcome::Saved {
+                warning: nc_warning(&conn).map(str::to_string),
                 alias: conn.alias,
                 report,
             },

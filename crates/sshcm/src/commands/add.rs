@@ -35,7 +35,7 @@ pub fn run(ctx: &Ctx, alias: Option<String>, fields: &Fields) -> Result<()> {
     preset.alias = alias.unwrap_or_default();
 
     let conn = form::fill(&store, preset, None, &skip)?;
-    validate(&conn, None, &store.known(None), &ctx.home, true)?;
+    validate(&conn, None, &store.known(None), &ctx.home)?;
 
     if !ctx.yes {
         // Separate the preview from the questions above it.

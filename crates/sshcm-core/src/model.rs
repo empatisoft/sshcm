@@ -344,71 +344,98 @@ impl Known {
     }
 }
 
-/// Validates a whole connection against the rest of the config.
+/// Validates a connection against the rest of the config.
 ///
-/// `original_alias` is the alias before editing, or `None` when adding.
-/// The identity file is only checked for existence when
-/// `check_identity_file` is set, so an unchanged value in an existing block
-/// is never rejected.
+/// `before` is the connection as it is in the file, or `None` when adding.
+/// When editing, only settings whose value changed are checked: a value that
+/// is already in the file is ssh's business, and must never stop the user
+/// from changing something else in the block. For the same reason a block
+/// without `HostName` (ssh then uses the alias) may stay that way; only a
+/// new connection needs one.
 pub fn validate(
     conn: &Connection,
-    original_alias: Option<&str>,
+    before: Option<&Connection>,
     known: &Known,
     home: &Path,
-    check_identity_file: bool,
 ) -> Result<(), ValidationError> {
-    validate_alias(&conn.alias)?;
+    let original_alias = before.map(|b| b.alias.as_str());
+    let alias_changed = before.is_none_or(|b| b.alias != conn.alias);
+
+    if alias_changed {
+        validate_alias(&conn.alias)?;
+    }
     if known.names.iter().any(|n| n == &conn.alias) {
         return Err(ValidationError::AliasTaken(conn.alias.clone()));
     }
-    validate_hostname(conn.hostname.as_deref().unwrap_or(""))?;
-    if let Some(user) = &conn.user {
+
+    match &conn.hostname {
+        Some(hostname) if before.is_none_or(|b| b.hostname.as_ref() != Some(hostname)) => {
+            validate_hostname(hostname)?;
+        }
+        None if before.is_none() => return Err(ValidationError::HostNameEmpty),
+        _ => {}
+    }
+    if let Some(user) = &conn.user
+        && before.is_none_or(|b| b.user.as_ref() != Some(user))
+    {
         validate_user(user)?;
     }
     if conn.port == Some(0) {
         return Err(ValidationError::PortInvalid);
     }
+    // An unchanged key path is not checked: the block may point at a key
+    // that only exists on another machine.
     if let Some(file) = &conn.identity_file
-        && check_identity_file
+        && before.is_none_or(|b| b.identity_file.as_ref() != Some(file))
         && !file.contains('%')
         && !file.contains("${")
         && !expand_tilde(file, home).exists()
     {
         return Err(ValidationError::IdentityFileMissing(file.clone()));
     }
-    match &conn.proxy {
-        Proxy::None => {}
-        Proxy::Jump(hops) => {
-            if hops.is_empty() {
-                return Err(ValidationError::JumpEmpty);
-            }
-            for hop in hops {
-                validate_hop(hop)?;
-                let host = hop_host(hop);
-                if host == conn.alias || Some(host) == original_alias {
-                    return Err(ValidationError::JumpSelf(conn.alias.clone()));
+
+    // A new alias can turn an untouched proxy into a self-reference, so the
+    // proxy is checked again when the alias changes.
+    if alias_changed || before.is_none_or(|b| b.proxy != conn.proxy) {
+        match &conn.proxy {
+            Proxy::None => {}
+            Proxy::Jump(hops) => {
+                if hops.is_empty() {
+                    return Err(ValidationError::JumpEmpty);
                 }
-                for me in [Some(conn.alias.as_str()), original_alias]
-                    .into_iter()
-                    .flatten()
-                {
-                    if known.reaches(host, me, &mut Vec::new()) {
-                        return Err(ValidationError::JumpCycle(host.to_string()));
+                for hop in hops {
+                    validate_hop(hop)?;
+                    let host = hop_host(hop);
+                    if host == conn.alias || Some(host) == original_alias {
+                        return Err(ValidationError::JumpSelf(conn.alias.clone()));
+                    }
+                    for me in [Some(conn.alias.as_str()), original_alias]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if known.reaches(host, me, &mut Vec::new()) {
+                            return Err(ValidationError::JumpCycle(host.to_string()));
+                        }
                     }
                 }
             }
-        }
-        Proxy::Socks5(addr) | Proxy::Http(addr) => validate_proxy_address(addr)?,
-        Proxy::Command(cmd) => {
-            if cmd.trim().is_empty() {
-                return Err(ValidationError::ProxyCommandEmpty);
+            Proxy::Socks5(addr) | Proxy::Http(addr) => validate_proxy_address(addr)?,
+            Proxy::Command(cmd) => {
+                if cmd.trim().is_empty() {
+                    return Err(ValidationError::ProxyCommandEmpty);
+                }
             }
         }
     }
-    if let Some(desc) = &conn.description {
+
+    if let Some(desc) = &conn.description
+        && before.is_none_or(|b| b.description.as_ref() != Some(desc))
+    {
         validate_description(desc)?;
     }
-    parse_tags(&conn.tags.join(","))?;
+    if before.is_none_or(|b| b.tags != conn.tags) {
+        parse_tags(&conn.tags.join(","))?;
+    }
     Ok(())
 }
 
@@ -463,8 +490,10 @@ mod tests {
         }
     }
 
+    /// Validates `c`; `original` is the alias of the block being edited.
     fn check(c: &Connection, original: Option<&str>, k: &Known) -> Result<(), ValidationError> {
-        validate(c, original, k, Path::new("/nonexistent"), true)
+        let before = original.map(conn);
+        validate(c, before.as_ref(), k, Path::new("/nonexistent"))
     }
 
     #[test]
@@ -618,22 +647,85 @@ mod tests {
     }
 
     #[test]
-    fn missing_identity_file_is_rejected_only_when_checked() {
+    fn missing_identity_file_is_rejected_only_when_it_changed() {
         let mut c = conn("a");
         c.identity_file = Some("~/.ssh/nope".to_string());
         assert!(matches!(
             check(&c, None, &Known::default()),
             Err(ValidationError::IdentityFileMissing(_))
         ));
-        assert!(
-            validate(
-                &c,
-                None,
-                &Known::default(),
-                Path::new("/nonexistent"),
-                false
-            )
-            .is_ok()
+        // The block already pointed at that file: not sshcm's call.
+        let home = Path::new("/nonexistent");
+        assert!(validate(&c, Some(&c), &Known::default(), home).is_ok());
+        let mut edited = c.clone();
+        edited.identity_file = Some("~/.ssh/other".to_string());
+        assert!(matches!(
+            validate(&edited, Some(&c), &Known::default(), home),
+            Err(ValidationError::IdentityFileMissing(_))
+        ));
+    }
+
+    #[test]
+    fn a_block_without_hostname_can_be_edited_but_not_created() {
+        let home = Path::new("/nonexistent");
+        let before = Connection {
+            alias: "github.com".to_string(),
+            user: Some("git".to_string()),
+            ..Connection::default()
+        };
+        let mut edited = before.clone();
+        edited.port = Some(443);
+        assert!(validate(&edited, Some(&before), &Known::default(), home).is_ok());
+        assert_eq!(
+            validate(&before, None, &Known::default(), home),
+            Err(ValidationError::HostNameEmpty)
+        );
+        // A HostName that is being set is still checked.
+        edited.hostname = Some("not a host".to_string());
+        assert_eq!(
+            validate(&edited, Some(&before), &Known::default(), home),
+            Err(ValidationError::HostNameInvalid)
+        );
+    }
+
+    #[test]
+    fn values_already_in_the_file_do_not_block_other_edits() {
+        let home = Path::new("/nonexistent");
+        // Written by hand: fine for ssh, outside sshcm's own rules.
+        let before = Connection {
+            alias: "odd=name".to_string(),
+            hostname: Some("host/with/slash".to_string()),
+            user: Some("-weird".to_string()),
+            description: None,
+            tags: vec!["has space".to_string()],
+            ..Connection::default()
+        };
+        let mut edited = before.clone();
+        edited.port = Some(2222);
+        assert!(validate(&edited, Some(&before), &Known::default(), home).is_ok());
+
+        // Touching one of those values brings its rule back.
+        let mut renamed = before.clone();
+        renamed.alias = "still=odd".to_string();
+        assert_eq!(
+            validate(&renamed, Some(&before), &Known::default(), home),
+            Err(ValidationError::AliasInvalidChar('='))
+        );
+        let mut retagged = before.clone();
+        retagged.tags.push("ok".to_string());
+        assert!(validate(&retagged, Some(&before), &Known::default(), home).is_err());
+    }
+
+    #[test]
+    fn renaming_rechecks_an_untouched_proxy() {
+        let home = Path::new("/nonexistent");
+        let mut before = conn("web");
+        before.proxy = Proxy::Jump(vec!["gate".to_string()]);
+        let mut renamed = before.clone();
+        renamed.alias = "gate".to_string();
+        assert_eq!(
+            validate(&renamed, Some(&before), &Known::default(), home),
+            Err(ValidationError::JumpSelf("gate".to_string()))
         );
     }
 

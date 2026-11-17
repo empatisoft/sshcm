@@ -45,15 +45,12 @@ pub fn run(
         form::fill(&store, preset, Some(&original), &form::Skip::default())?
     };
 
-    // An unchanged key path is not re-checked: the block may point at a key
-    // that only exists on another machine.
-    let key_changed = conn.identity_file != entry.conn.identity_file;
+    // Only what changed is checked; values already in the file are left to ssh.
     validate(
         &conn,
-        Some(&original),
+        Some(&entry.conn),
         &store.known(Some(&original)),
         &ctx.home,
-        key_changed,
     )?;
 
     // Apply the edit to a copy first: it gives the preview, and the real

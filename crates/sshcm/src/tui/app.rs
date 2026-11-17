@@ -302,7 +302,22 @@ impl App {
         }
     }
 
+    fn dry_run_notice(&mut self) {
+        self.set_status(
+            Tone::Warn,
+            tr(
+                "Dry run: nothing was written.",
+                "Deneme çalıştırması: hiçbir şey yazılmadı.",
+            )
+            .to_string(),
+        );
+    }
+
     fn remove(&mut self, alias: &str) {
+        if self.ctx.dry_run {
+            self.dry_run_notice();
+            return;
+        }
         let result = self
             .store
             .remove(alias)
@@ -318,6 +333,7 @@ impl App {
                 self.saved_status(
                     trf("Removed {}", "{} silindi", &[alias]),
                     report.verification,
+                    None,
                 );
             }
             Err(message) => {
@@ -327,9 +343,12 @@ impl App {
         }
     }
 
-    fn saved_status(&mut self, text: String, verification: Verification) {
+    fn saved_status(&mut self, text: String, verification: Verification, warning: Option<String>) {
         match verification {
-            Verification::Passed => self.set_status(Tone::Ok, text),
+            Verification::Passed => match warning {
+                Some(warning) => self.set_status(Tone::Warn, format!("{text} · {warning}")),
+                None => self.set_status(Tone::Ok, text),
+            },
             Verification::Skipped => self.set_status(
                 Tone::Warn,
                 format!(
@@ -351,7 +370,16 @@ impl App {
                 self.screen = Screen::Main;
                 self.set_status(Tone::Ok, tr("No changes.", "Değişiklik yok.").to_string());
             }
-            Outcome::Saved { alias, report } => {
+            Outcome::DryRun => {
+                self.screen = Screen::Main;
+                self.refresh(None);
+                self.dry_run_notice();
+            }
+            Outcome::Saved {
+                alias,
+                report,
+                warning,
+            } => {
                 self.screen = Screen::Main;
                 // Show the saved connection even if a search would hide it.
                 self.search.set("");
@@ -360,6 +388,7 @@ impl App {
                 self.saved_status(
                     trf("Saved {}", "{} kaydedildi", &[&alias]),
                     report.verification,
+                    warning,
                 );
             }
         }
