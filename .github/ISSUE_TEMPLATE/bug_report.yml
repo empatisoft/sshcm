@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please remove real host names, user names and IP addresses from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact command, or the keys you pressed in the full-screen interface.
+      placeholder: |
+        1. sshcm edit web --port 2222
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Config block involved
+      description: The Host block before the change (and after, if the file was written). `sshcm --dry-run` shows the change without writing.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: sshcm version
+      description: Output of `sshcm --version`
+      placeholder: sshcm 0.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew
+        - Install script
+        - Prebuilt binary from the releases page
+        - cargo install
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system, terminal and ssh version
+      description: For example "macOS 15, iTerm2, OpenSSH_9.8" (`ssh -V` prints the ssh version)
+    validations:
+      required: true

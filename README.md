@@ -232,9 +232,17 @@ Language order: `--lang`, then the `SSHCM_LANG` environment variable, then the
 settings file. Command names and flags are the same in every language.
 `NO_COLOR` turns colors off.
 
+## Feedback
+
+Found a bug, or missing something? Open an issue:
+[github.com/empatisoft/sshcm/issues](https://github.com/empatisoft/sshcm/issues/new/choose).
+There is a form for bug reports and one for feature requests. Please remove
+real host names and addresses from anything you paste.
+
 ## Roadmap
 
-- v1.0: stable command line
+sshcm stays at `0.x` while the command line can still change. v1.0 will fix
+the command names and flags, based on the feedback collected until then.
 
 ## License
 

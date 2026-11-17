@@ -1,0 +1,21 @@
+name: Feature request
+description: An idea or something sshcm should do differently
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation you are in, more than the solution. An example from your own workflow helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like sshcm to do?
+      description: A command, a flag, a key or a screen, as you imagine it.
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you handle it today?
+      description: By editing the config by hand, with another tool, or not at all?
