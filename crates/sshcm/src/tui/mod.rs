@@ -7,6 +7,7 @@ mod app;
 mod form;
 mod input;
 mod picker;
+mod theme;
 mod ui;
 
 #[cfg(test)]
@@ -27,6 +28,10 @@ pub fn run(ctx: &Ctx) -> Result<()> {
         return Err(InquireError::NotTTY.into());
     }
     let mut app = App::new(ctx.clone())?;
+    // Ask the terminal for its background while it is still in its normal
+    // state: the colors are picked for a dark or a light screen.
+    let setting = std::env::var("SSHCM_THEME").unwrap_or_else(|_| ctx.settings.theme.clone());
+    app.theme = theme::Theme::detect(&setting);
 
     // `init` switches to the alternate screen and installs a panic hook that
     // restores the terminal.

@@ -277,6 +277,7 @@ sshcm's own settings live in `~/.config/sshcm/config.toml`.
 | --- | --- | --- |
 | `language` | `en` | `en`, `tr` |
 | `backup_keep` | `10` | whole number, 1 or more |
+| `theme` | `auto` | `auto`, `dark`, `light` |
 
 ```sh
 sshcm config set language tr
@@ -285,7 +286,21 @@ sshcm config get backup_keep
 
 Language order: `--lang`, then the `SSHCM_LANG` environment variable, then the
 settings file. Command names and flags are the same in every language.
-`NO_COLOR` turns colors off.
+
+### Colors
+
+The full-screen interface asks the terminal for its background color when it
+starts and picks its colors for a dark or a light screen, so labels and hints
+stay readable on both. If the terminal does not answer, secondary text is the
+terminal's own text color, dimmed. Should the result look wrong, say which
+one you have:
+
+```sh
+sshcm config set theme dark    # or light; auto is the default
+SSHCM_THEME=light sshcm        # for one run
+```
+
+`NO_COLOR` turns colors off everywhere.
 
 ## Feedback
 

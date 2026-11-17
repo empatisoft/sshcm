@@ -545,6 +545,11 @@ fn settings_and_language() {
     assert_eq!(sb.run(&["config", "set", "backup_keep", "0"]).code, 1);
     assert_eq!(sb.run(&["config", "set", "language", "de"]).code, 1);
     assert_eq!(sb.run(&["config", "get", "nope"]).code, 1);
+    assert_eq!(sb.run(&["config", "get", "theme"]).stdout, "auto\n");
+    assert_eq!(sb.run(&["config", "set", "theme", "solarized"]).code, 1);
+    assert_eq!(sb.run(&["config", "set", "theme", "light"]).code, 0);
+    assert_eq!(sb.run(&["config", "get", "theme"]).stdout, "light\n");
+    assert_eq!(sb.run(&["config", "set", "theme", "auto"]).code, 0);
 
     assert_eq!(
         sb.run(&["list"]).stdout,
@@ -553,7 +558,7 @@ fn settings_and_language() {
     assert_eq!(sb.run(&["config", "set", "language", "tr"]).code, 0);
     assert_eq!(
         fs::read_to_string(sb.home().join(".config/sshcm/config.toml")).unwrap(),
-        "language = \"tr\"\nbackup_keep = 10\n"
+        "language = \"tr\"\nbackup_keep = 10\ntheme = \"auto\"\n"
     );
     assert_eq!(
         sb.run(&["list"]).stdout,

@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 use super::app::{App, Effect, Screen, Tone};
 use super::form::Field;
+use super::theme::{Mode, Theme};
 use super::ui;
 use crate::commands::Ctx;
 use crate::settings::Settings;
@@ -855,7 +856,12 @@ fn main_screen_layout() {
     f.press(KeyCode::Down);
     let screen = f.screen(110, 24);
     let lines: Vec<&str> = screen.lines().collect();
-    assert!(lines[0].starts_with("sshcm  4 connections"), "{screen}");
+    // One column of margin on each side.
+    assert!(lines[0].starts_with(" sshcm  4 connections"), "{screen}");
+    assert!(
+        lines.iter().all(|l| l.is_empty() || l.starts_with(' ')),
+        "{screen}"
+    );
     assert!(lines[0].ends_with("~/.ssh/config"), "{screen}");
     assert!(screen.contains("❯ web-prod  deploy@10.0.2.10"), "{screen}");
     assert!(screen.contains("via bastion"), "{screen}");
@@ -1078,10 +1084,7 @@ fn every_screen_is_drawn_in_turkish() {
         assert!(screen.contains("Bağlantıyı düzenle  bastion"), "{screen}");
         assert!(screen.contains("┌ Önizleme "), "{screen}");
         assert!(screen.contains("❯ Port            70000"), "{screen}");
-        assert!(
-            screen.contains("Port 1 ile 65535 arasında olmalıdır."),
-            "{screen}"
-        );
+        assert!(screen.contains("Port 1 ile 65535 arasında"), "{screen}");
         assert!(
             screen.contains("  Anahtar dosyası ~/.ssh/id_ed25519"),
             "{screen}"
@@ -1316,7 +1319,7 @@ fn the_form_sets_and_clears_the_group() {
     f.clear();
     f.chars("two words");
     assert!(
-        f.screen(100, 22)
+        f.screen(140, 22)
             .contains("Group 'two words' is not valid.")
     );
     f.clear();
@@ -1380,4 +1383,150 @@ fn a_copy_stays_in_the_group_of_its_source() {
             "# sshcm:group a-company\nHost web2\n    HostName 10.0.2.10\n    User deploy\n"
         )
     );
+}
+
+// ---------------------------------------------------------------- colors --
+
+/// Draws the interface and returns the cells with their styles.
+fn cells(f: &Fixture, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| ui::draw(frame, &f.app))
+        .expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+/// The style of the first cell of `text` on the screen.
+fn style_of(buffer: &ratatui::buffer::Buffer, text: &str) -> ratatui::style::Style {
+    let width = buffer.area.width as usize;
+    let symbols: Vec<&str> = buffer.content.iter().map(|c| c.symbol()).collect();
+    let needle: Vec<String> = text.chars().map(|c| c.to_string()).collect();
+    let at = (0..symbols.len().saturating_sub(needle.len()))
+        .find(|&i| {
+            needle
+                .iter()
+                .enumerate()
+                .all(|(k, ch)| symbols[i + k] == ch)
+        })
+        .unwrap_or_else(|| panic!("{text:?} is not on the screen"));
+    buffer[((at % width) as u16, (at / width) as u16)].style()
+}
+
+#[test]
+fn no_text_is_drawn_in_a_color_that_can_vanish() {
+    use ratatui::style::Color;
+
+    // Bright black and black are close to the background on many dark
+    // themes; white and bright white on light ones.
+    let risky = [
+        Color::Black,
+        Color::DarkGray,
+        Color::Gray,
+        Color::White,
+        Color::Indexed(0),
+        Color::Indexed(8),
+        Color::Indexed(7),
+        Color::Indexed(15),
+    ];
+    for mode in [Mode::Dark, Mode::Light, Mode::Unknown] {
+        let mut f = Fixture::new(GROUPED);
+        f.app.theme = Theme::new(mode);
+        let mut screens = vec![cells(&f, 110, 26)];
+        f.press(KeyCode::Char('?'));
+        screens.push(cells(&f, 110, 34));
+        f.press(KeyCode::Esc);
+        f.press(KeyCode::Char('d'));
+        screens.push(cells(&f, 110, 26));
+        f.press(KeyCode::Esc);
+        f.press(KeyCode::Char('e'));
+        f.chars(" x");
+        screens.push(cells(&f, 110, 26));
+        for _ in 0..5 {
+            f.press(KeyCode::Tab);
+        }
+        f.press(KeyCode::Enter);
+        screens.push(cells(&f, 110, 26));
+        for buffer in &screens {
+            for cell in buffer.content.iter().filter(|c| c.symbol() != " ") {
+                assert!(
+                    !cell.style().fg.is_some_and(|fg| risky.contains(&fg)),
+                    "{mode:?}: {:?} drawn in {:?}",
+                    cell.symbol(),
+                    cell.style().fg
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn secondary_text_follows_the_terminal_background() {
+    use ratatui::style::{Color, Modifier};
+
+    let mut f = Fixture::new(GROUPED);
+    for (mode, gray) in [(Mode::Dark, 247), (Mode::Light, 241)] {
+        f.app.theme = Theme::new(mode);
+        let buffer = cells(&f, 110, 26);
+        // Labels, hints and the path are the muted gray for that background.
+        for text in [
+            "HostName",
+            "Config block",
+            "connect",
+            "Search by alias",
+            "~/.ssh/config",
+        ] {
+            assert_eq!(
+                style_of(&buffer, text).fg,
+                Some(Color::Indexed(gray)),
+                "{mode:?} {text}"
+            );
+        }
+        // Values keep the terminal's own text color.
+        assert_eq!(style_of(&buffer, "192.168.1.10 ").fg, Some(Color::Reset));
+    }
+
+    // Unknown background: no fixed gray at all, only the dim attribute.
+    f.app.theme = Theme::new(Mode::Unknown);
+    let buffer = cells(&f, 110, 26);
+    let label = style_of(&buffer, "HostName");
+    assert_eq!(label.fg, Some(Color::Reset));
+    assert!(label.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn panel_titles_are_never_dimmed_with_their_border() {
+    use ratatui::style::{Color, Modifier};
+
+    for mode in [Mode::Dark, Mode::Light, Mode::Unknown] {
+        let mut f = Fixture::new(GROUPED);
+        f.app.theme = Theme::new(mode);
+        // The detail panel has no focus: its border is muted, its title not.
+        let title = style_of(&cells(&f, 110, 26), " laptop ─");
+        assert_eq!(title.fg, Some(Color::Reset), "{mode:?}");
+        assert!(title.add_modifier.contains(Modifier::BOLD), "{mode:?}");
+        assert!(!title.add_modifier.contains(Modifier::DIM), "{mode:?}");
+        f.press(KeyCode::Char('e'));
+        let title = style_of(&cells(&f, 110, 26), " Preview ─");
+        assert_eq!(title.fg, Some(Color::Reset), "{mode:?}");
+        assert!(!title.add_modifier.contains(Modifier::DIM), "{mode:?}");
+    }
+}
+
+#[test]
+fn accent_is_readable_on_light_backgrounds() {
+    use ratatui::style::Color;
+
+    let mut f = Fixture::new(GROUPED);
+    f.app.theme = Theme::new(Mode::Light);
+    let buffer = cells(&f, 110, 26);
+    // Cyan and yellow on white are unreadable; light terminals get dark
+    // variants, and the selected row a light band.
+    let key = style_of(&buffer, "enter connect");
+    assert_eq!(key.fg, Some(Color::Indexed(25)));
+    let selected = style_of(&buffer, "laptop   192");
+    assert_eq!(selected.bg, Some(Color::Indexed(254)));
+
+    f.app.theme = Theme::new(Mode::Dark);
+    let selected = style_of(&cells(&f, 110, 26), "laptop   192");
+    assert_eq!(selected.bg, Some(Color::Indexed(237)));
 }

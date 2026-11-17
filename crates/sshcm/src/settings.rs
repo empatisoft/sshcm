@@ -9,13 +9,19 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, Result};
 use crate::i18n::{Lang, tr, trf};
 
-pub const KEYS: [&str; 2] = ["language", "backup_keep"];
+pub const KEYS: [&str; 3] = ["language", "backup_keep", "theme"];
+
+/// Values of the `theme` setting.
+const THEMES: [&str; 3] = ["auto", "dark", "light"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub language: String,
     pub backup_keep: usize,
+    /// Colors of the full-screen interface: `auto` asks the terminal for
+    /// its background, `dark` and `light` skip the question.
+    pub theme: String,
 }
 
 impl Default for Settings {
@@ -23,6 +29,7 @@ impl Default for Settings {
         Settings {
             language: "en".to_string(),
             backup_keep: 10,
+            theme: "auto".to_string(),
         }
     }
 }
@@ -53,7 +60,10 @@ impl Settings {
     }
 
     fn check(&self, path: &Path) -> Result<()> {
-        if Lang::parse(&self.language).is_none() || self.backup_keep == 0 {
+        if Lang::parse(&self.language).is_none()
+            || self.backup_keep == 0
+            || !THEMES.contains(&self.theme.as_str())
+        {
             return Err(AppError::Message(trf(
                 "{} has an invalid value. Fix it with: sshcm config set <key> <value>",
                 "{} geçersiz bir değer içeriyor. Düzeltmek için: sshcm config set <ayar> <değer>",
@@ -81,6 +91,7 @@ impl Settings {
         match key {
             "language" => Ok(self.language.clone()),
             "backup_keep" => Ok(self.backup_keep.to_string()),
+            "theme" => Ok(self.theme.clone()),
             _ => Err(unknown_key(key)),
         }
     }
@@ -108,6 +119,16 @@ impl Settings {
                             "backup_keep 1 veya daha büyük bir tam sayı olmalıdır.",
                         ))
                     })?;
+            }
+            "theme" => {
+                let theme = value.trim().to_ascii_lowercase();
+                if !THEMES.contains(&theme.as_str()) {
+                    return Err(AppError::msg(tr(
+                        "theme must be auto, dark or light.",
+                        "theme değeri auto, dark veya light olmalıdır.",
+                    )));
+                }
+                self.theme = theme;
             }
             _ => return Err(unknown_key(key)),
         }
@@ -145,6 +166,9 @@ mod tests {
         assert!(s.set("language", "de").is_err());
         assert!(s.set("backup_keep", "0").is_err());
         assert!(s.set("backup_keep", "many").is_err());
+        s.set("theme", "Light").unwrap();
+        assert_eq!(s.get("theme").unwrap(), "light");
+        assert!(s.set("theme", "solarized").is_err());
         assert!(s.set("nope", "1").is_err());
         assert!(s.get("nope").is_err());
     }

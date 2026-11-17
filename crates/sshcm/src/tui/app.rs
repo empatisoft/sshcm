@@ -11,6 +11,7 @@ use sshcm_core::{Entry, SaveReport, Store, Verification};
 
 use super::form::{Form, Outcome};
 use super::input::TextInput;
+use super::theme::Theme;
 use crate::commands::{Ctx, by_group};
 use crate::error::Result;
 use crate::i18n::{self, tr, trf};
@@ -81,6 +82,8 @@ pub struct App {
     pub group_filter: GroupFilter,
     pub status: Option<Status>,
     pub screen: Screen,
+    /// Colors; chosen for the terminal before the interface starts.
+    pub theme: Theme,
     /// Lines the detail panel is scrolled down by.
     pub detail_scroll: usize,
     /// How far the detail panel can scroll; set while drawing.
@@ -102,6 +105,7 @@ impl App {
             group_filter: GroupFilter::All,
             status: None,
             screen: Screen::Main,
+            theme: Theme::default(),
             detail_scroll: 0,
             detail_max: Cell::new(0),
             matcher: Matcher::new(Config::DEFAULT),

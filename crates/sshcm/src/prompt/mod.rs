@@ -27,9 +27,11 @@ pub fn init() {
             Styled::new(text).with_fg(color)
         }
     };
-    config.prompt_prefix = styled("?", Color::LightCyan);
-    config.answered_prompt_prefix = styled(">", Color::LightGreen);
-    config.highlighted_option_prefix = styled("❯", Color::LightCyan);
+    // The plain ANSI colors, not their bright variants: terminal themes
+    // keep these readable on their own background, light or dark.
+    config.prompt_prefix = styled("?", Color::DarkCyan);
+    config.answered_prompt_prefix = styled(">", Color::DarkGreen);
+    config.highlighted_option_prefix = styled("❯", Color::DarkCyan);
     inquire::set_global_render_config(config);
 }
 

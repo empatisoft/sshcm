@@ -421,8 +421,8 @@ fn alias_help(arg: clap::Arg) -> clap::Arg {
 
 fn key_help(arg: clap::Arg) -> clap::Arg {
     arg.help(tr(
-        "Setting name: language or backup_keep",
-        "Ayar adı: language veya backup_keep",
+        "Setting name: language, backup_keep or theme",
+        "Ayar adı: language, backup_keep veya theme",
     ))
 }
 

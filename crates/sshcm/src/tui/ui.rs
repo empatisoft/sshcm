@@ -4,7 +4,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use sshcm_core::model::{DEFAULT_PORT, collapse_tilde, parse_port};
@@ -14,66 +14,13 @@ use super::app::{App, DeleteDialog, GroupFilter, Screen, Tone};
 use super::form::{Field, Form, Overlay};
 use super::input::TextInput;
 use super::picker::{KeyPicker, Kind, ProxyPicker};
+use super::theme::Theme;
 use crate::commands::proxy_short;
 use crate::i18n::{tr, trf};
 
 /// Below this width the detail panel is hidden and only the list is shown.
 const NARROW: u16 = 80;
 const LABEL_WIDTH: usize = 18;
-
-#[derive(Clone, Copy)]
-struct Theme {
-    color: bool,
-}
-
-impl Theme {
-    fn current() -> Theme {
-        Theme {
-            color: std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
-        }
-    }
-
-    fn fg(self, color: Color) -> Style {
-        if self.color {
-            Style::new().fg(color)
-        } else {
-            Style::new()
-        }
-    }
-
-    fn accent(self) -> Style {
-        self.fg(Color::Cyan)
-    }
-
-    fn dim(self) -> Style {
-        if self.color {
-            Style::new().fg(Color::DarkGray)
-        } else {
-            Style::new().add_modifier(Modifier::DIM)
-        }
-    }
-
-    fn ok(self) -> Style {
-        self.fg(Color::Green)
-    }
-
-    fn warn(self) -> Style {
-        self.fg(Color::Yellow)
-    }
-
-    fn error(self) -> Style {
-        self.fg(Color::Red)
-    }
-
-    fn strong(self) -> Style {
-        Style::new().add_modifier(Modifier::BOLD)
-    }
-
-    /// A selected button or tab.
-    fn chosen(self) -> Style {
-        Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-    }
-}
 
 fn width(text: &str) -> usize {
     text.chars().count()
@@ -161,13 +108,20 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let theme = Theme::current();
+    let theme = app.theme;
+    // One column of air on each side, so text never touches the window edge.
+    let full = frame.area();
+    let area = if full.width >= 40 {
+        Rect::new(full.x + 1, full.y, full.width - 2, full.height)
+    } else {
+        full
+    };
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
 
     match &app.screen {
         Screen::Form(form) => {
@@ -482,7 +436,7 @@ fn draw_form_footer(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme
 // ------------------------------------------------------------ main screen --
 
 fn draw_main(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
-    if area.width < NARROW {
+    if frame.area().width < NARROW {
         draw_list(frame, area, app, theme);
         return;
     }
@@ -506,7 +460,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
                     format!(" {} · {} ", tr("Connections", "Bağlantılar"), no_group())
                 }
             },
-            theme.strong(),
+            theme.title(),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -642,7 +596,13 @@ fn list_row(
     if !via.is_empty() {
         spans.push(Span::styled(format!("  {via}"), rest_style));
     }
-    Line::from(spans)
+    let line = Line::from(spans);
+    if selected {
+        // A band across the row, on top of the marker and the accent color.
+        line.style(theme.selected_row())
+    } else {
+        line
+    }
 }
 
 fn proxy_long(proxy: &Proxy) -> String {
@@ -661,14 +621,14 @@ fn proxy_long(proxy: &Proxy) -> String {
 
 fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     let Some(entry) = app.current() else {
-        frame.render_widget(Block::bordered().border_style(theme.dim()), area);
+        frame.render_widget(Block::bordered().border_style(theme.border()), area);
         return;
     };
     let block = Block::bordered()
-        .border_style(theme.dim())
+        .border_style(theme.border())
         .title(Span::styled(
             format!(" {} ", entry.patterns.join(" ")),
-            theme.strong(),
+            theme.title(),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -765,7 +725,7 @@ fn input_view(input: &TextInput, room: usize) -> (String, usize) {
 }
 
 fn draw_form(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme: Theme) {
-    let (fields_area, preview_area) = if area.width < NARROW {
+    let (fields_area, preview_area) = if frame.area().width < NARROW {
         (area, None)
     } else {
         let [left, right] =
@@ -777,7 +737,7 @@ fn draw_form(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme: Theme
         .border_style(theme.accent())
         .title(Span::styled(
             format!(" {} ", tr("Connection", "Bağlantı")),
-            theme.strong(),
+            theme.title(),
         ));
     let inner = block.inner(fields_area);
     frame.render_widget(block, fields_area);
@@ -888,10 +848,10 @@ fn change_line(change: Change, text: &str, room: usize, theme: Theme) -> Line<'s
 
 fn draw_preview(frame: &mut Frame, area: Rect, app: &App, form: &Form, theme: Theme) {
     let block = Block::bordered()
-        .border_style(theme.dim())
+        .border_style(theme.border())
         .title(Span::styled(
             format!(" {} ", tr("Preview", "Önizleme")),
-            theme.strong(),
+            theme.title(),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -938,7 +898,7 @@ fn popup(
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
         .border_style(border)
-        .title(Span::styled(format!(" {title} "), theme.strong()));
+        .title(Span::styled(format!(" {title} "), theme.title()));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     // One column of padding on each side.

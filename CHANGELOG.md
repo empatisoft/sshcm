@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-17
+
+### Fixed
+
+- Labels, hints, the search placeholder and the border and title of the
+  details panel were drawn in "bright black", which is close to invisible on
+  many dark terminal themes. The interface now asks the terminal for its
+  background and uses grays and accents chosen for a dark or a light screen;
+  when the background is unknown it dims the terminal's own text color.
+- On light terminals the accent is a dark blue and warnings a dark orange
+  instead of cyan and yellow, which are unreadable on white.
+- Panel titles keep the normal text color when their border is muted.
+- The prompts of the subcommands use the plain ANSI colors instead of the
+  bright variants.
+
+### Added
+
+- `theme` setting (`auto`, `dark`, `light`) and `SSHCM_THEME`, to override
+  the detection.
+- The selected row has a background band, and the interface keeps one column
+  of margin on each side.
+
 ## [0.6.0] - 2026-11-17
 
 ### Added
